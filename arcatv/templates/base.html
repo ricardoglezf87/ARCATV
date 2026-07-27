@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}ARCATV{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="{{ url_for('dashboard') }}" aria-label="Ir al panel de ARCATV">
+            <span class="brand-mark">A</span>
+            <span>ARCATV</span>
+        </a>
+        <nav class="main-nav" aria-label="Navegación principal">
+            <a href="{{ url_for('dashboard') }}">Mis series</a>
+            <a href="{{ url_for('upcoming') }}">Próximos</a>
+            <a href="{{ url_for('search') }}">Buscar</a>
+        </nav>
+        <form class="top-search" action="{{ url_for('search') }}" method="get">
+            <label class="sr-only" for="global-search">Buscar una serie</label>
+            <input id="global-search" name="q" type="search" placeholder="Buscar serie" value="{{ request.args.get('q', '') }}">
+            <button type="submit">Buscar</button>
+        </form>
+    </header>
+
+    <main class="page-shell">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="messages" aria-live="polite">
+                    {% for category, message in messages %}
+                        <p class="message message-{{ category }}">{{ message }}</p>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <span>Datos de series proporcionados por</span>
+        <a href="https://www.tvmaze.com/api" target="_blank" rel="noreferrer">TVmaze</a>
+    </footer>
+</body>
+</html>

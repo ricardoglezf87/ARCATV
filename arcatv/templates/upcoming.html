@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Próximos capítulos · ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Calendario</p>
+        <h1>Próximos capítulos</h1>
+    </div>
+</section>
+
+{% if sync_errors %}
+    <p class="inline-warning">No se pudieron actualizar ahora: {{ sync_errors | join(", ") }}.</p>
+{% endif %}
+
+{% if not upcoming %}
+    <section class="empty-state small">
+        <h2>Sin próximos capítulos conocidos</h2>
+        <p>Cuando TVmaze tenga fechas nuevas para tus series, aparecerán aquí ordenadas por emisión.</p>
+    </section>
+{% else %}
+    <section class="calendar-list" aria-label="Próximos capítulos">
+        {% for episode in upcoming %}
+            <article class="calendar-row">
+                <div class="calendar-date">
+                    <span>{{ episode|format_air_datetime }}</span>
+                </div>
+                <div class="calendar-body">
+                    <h2>{{ episode.show_name }}</h2>
+                    <p><strong>{{ episode|episode_code }}</strong> · {{ episode.name }}</p>
+                    {% if episode.summary %}
+                        <p>{{ episode.summary }}</p>
+                    {% endif %}
+                </div>
+                <a class="button button-secondary" href="{{ url_for('show_detail', show_id=episode.show_id) }}">Abrir</a>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}
