@@ -8,6 +8,8 @@ ARCATV usa la API pública de [TVmaze](https://www.tvmaze.com/api), que ofrece b
 
 ## Puesta en marcha
 
+En Windows puedes usar doble clic sobre `iniciar_arcatv.bat` desde la raíz del proyecto. El script crea el entorno local si falta, instala dependencias y abre la web.
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
