@@ -43,6 +43,20 @@ EPISODES = [
     },
 ]
 
+FINALIZED_EPISODES = [
+    {
+        "id": 500,
+        "name": "Final pendiente",
+        "season": 1,
+        "number": 1,
+        "airdate": "2021-01-01",
+        "airtime": "21:00",
+        "runtime": 45,
+        "summary": "<p>Un final emitido.</p>",
+        "image": None,
+    }
+]
+
 CANDIDATE_HIGH_RATED = {
     "id": 2,
     "name": "Drama Excelente",
@@ -110,6 +124,8 @@ class FakeTVMazeClient:
     def get_episodes(self, show_id):
         if show_id == 1:
             return EPISODES
+        if show_id == 5:
+            return FINALIZED_EPISODES
         assert show_id in {2, 3, 4, 5, 6}
         return []
 
@@ -181,7 +197,7 @@ def test_mark_episode_updates_progress(client):
 
     assert response.status_code == 200
     assert "100%" in html
-    assert "1 de 1 emitidos vistos" in client.get("/").get_data(as_text=True)
+    assert "1 de 1 emitidos vistos" in client.get("/?estado=todas").get_data(as_text=True)
 
 
 def test_upcoming_lists_future_episodes(client):
@@ -285,8 +301,21 @@ def test_can_add_recommendation_from_recommendations(client):
     assert "Drama Excelente" in html
 
 
-def test_finalized_shows_are_hidden_on_dashboard_by_default(client):
+def test_only_completed_shows_are_hidden_on_dashboard_by_default(client):
     client.post("/series/5/add", follow_redirects=True)
+
+    assert "Serie Finalizada" in client.get("/").get_data(as_text=True)
+
+    client.post(
+        "/episodios/500/visto",
+        data={
+            "show_id": "5",
+            "season": "1",
+            "number": "1",
+            "name": "Final pendiente",
+            "watched": "1",
+        },
+    )
 
     assert "Serie Finalizada" not in client.get("/").get_data(as_text=True)
     assert "Serie Finalizada" in client.get("/?estado=todas").get_data(as_text=True)

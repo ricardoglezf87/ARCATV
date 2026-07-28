@@ -34,5 +34,5 @@ Después abre `http://127.0.0.1:5000`.
 - Consultar una vista ordenada de próximos capítulos de tus series guardadas.
 - Ordenar el panel para priorizar series con pendientes según tu último episodio marcado como visto.
 - Mostrar numeración absoluta en series con temporadas anuales, útil para casos como anime largo.
-- Ocultar series finalizadas por defecto en el inicio y actualizar datos manualmente solo para series en emisión o para toda la biblioteca.
+- Ocultar por defecto las series que ya tienes completamente vistas y actualizar datos manualmente solo para series en emisión o para toda la biblioteca.
 - Guardar todo el progreso en una base SQLite local dentro de `instance/`.

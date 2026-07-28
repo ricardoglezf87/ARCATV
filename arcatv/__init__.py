@@ -87,18 +87,28 @@ def register_routes(app):
 
         for saved_show in store.list_shows():
             show = saved_show
-            if not show_finalized and is_show_finalized(show):
-                continue
-
             episodes = get_show_episodes_cached(show["id"])
 
             watched_ids = store.get_watched_ids(show["id"])
             latest_watched_at = store.get_latest_watched_at(show["id"])
-            shows.append(build_show_state(show, episodes, watched_ids, latest_watched_at))
+            state = build_show_state(show, episodes, watched_ids, latest_watched_at)
+            if not show_finalized and is_show_completed(state):
+                continue
+            shows.append(state)
 
         shows = sort_dashboard_shows(shows)
         all_shows = store.list_shows()
-        hidden_finalized_count = sum(1 for show in all_shows if is_show_finalized(show))
+        hidden_completed_count = 0
+        if not show_finalized:
+            for show in all_shows:
+                state = build_show_state(
+                    show,
+                    get_show_episodes_cached(show["id"]),
+                    store.get_watched_ids(show["id"]),
+                    store.get_latest_watched_at(show["id"]),
+                )
+                if is_show_completed(state):
+                    hidden_completed_count += 1
 
         upcoming = sort_upcoming(
             episode
@@ -109,7 +119,7 @@ def register_routes(app):
         totals = {
             "shows": len(shows),
             "all_shows": len(all_shows),
-            "hidden_finalized": hidden_finalized_count if not show_finalized else 0,
+            "hidden_finalized": hidden_completed_count,
             "watched": sum(show["watched_count"] for show in shows),
             "aired": sum(show["aired_count"] for show in shows),
             "upcoming": len(upcoming),
@@ -386,9 +396,6 @@ def register_routes(app):
 
         for saved_show in store.list_shows():
             show = saved_show
-            if not show_finalized and is_show_finalized(show):
-                continue
-
             episodes = get_show_episodes_cached(show["id"])
 
             state = build_show_state(
@@ -397,6 +404,8 @@ def register_routes(app):
                 store.get_watched_ids(show["id"]),
                 store.get_latest_watched_at(show["id"]),
             )
+            if not show_finalized and is_show_completed(state):
+                continue
             upcoming_episodes.extend(state["upcoming_episodes"])
 
         return render_template(
@@ -557,6 +566,10 @@ def redirect_to_next(default_url):
 def is_show_finalized(show):
     status = (show.get("status") or "").casefold()
     return bool(show.get("ended")) or status in {"finalizada", "ended"}
+
+
+def is_show_completed(show_state):
+    return bool(show_state.get("completed"))
 
 
 def get_show(show_id, refresh=False):

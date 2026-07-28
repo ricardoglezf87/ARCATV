@@ -28,7 +28,7 @@
     {% else %}
         <a class="button button-secondary" href="{{ url_for('dashboard', estado='todas') }}">Mostrar finalizadas</a>
         {% if totals.hidden_finalized %}
-            <span class="muted">{{ totals.hidden_finalized }} finalizadas ocultas</span>
+            <span class="muted">{{ totals.hidden_finalized }} completadas ocultas</span>
         {% endif %}
     {% endif %}
 </div>
@@ -60,7 +60,7 @@
     <section class="empty-state">
         {% if totals.all_shows %}
             <h2>No hay series activas visibles</h2>
-            <p>Las series finalizadas están ocultas para que el inicio cargue más ligero.</p>
+            <p>Las series que ya tienes completamente vistas están ocultas para que el inicio cargue más ligero.</p>
         {% else %}
             <h2>Empieza buscando una serie</h2>
             <p>Guarda tus favoritas y ARCATV irá mostrando progreso, episodios pendientes y nuevas emisiones.</p>
