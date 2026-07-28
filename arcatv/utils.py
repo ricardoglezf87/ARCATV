@@ -56,6 +56,7 @@ GENRE_TRANSLATIONS = {
     "Nature": "Naturaleza",
     "Romance": "Romance",
     "Science-Fiction": "Ciencia ficción",
+    "Soap": "Telenovela",
     "Sports": "Deportes",
     "Supernatural": "Sobrenatural",
     "Thriller": "Suspense",
@@ -63,6 +64,21 @@ GENRE_TRANSLATIONS = {
     "War": "Bélica",
     "Western": "Wéstern",
 }
+
+TELENOVELA_NETWORKS = {
+    "Caracol TV",
+    "Las Estrellas",
+    "Telemundo",
+    "Televisa",
+    "Univision",
+}
+
+TELENOVELA_TERMS = [
+    "soap opera",
+    "telenovela",
+    "telenovelas",
+    "novela",
+]
 
 MONTHS = [
     "ene",
@@ -108,8 +124,25 @@ def translated_status(status):
     return STATUS_TRANSLATIONS.get(status, status or "Sin estado")
 
 
-def translated_genres(genres):
-    return [GENRE_TRANSLATIONS.get(genre, genre) for genre in (genres or [])]
+def translated_genres(genres, show=None, network=None):
+    translated = [GENRE_TRANSLATIONS.get(genre, genre) for genre in (genres or [])]
+    source_text = " ".join(
+        str(value or "")
+        for value in [
+            (show or {}).get("name"),
+            (show or {}).get("summary"),
+            network.get("name") if network else "",
+        ]
+    ).casefold()
+
+    if (
+        "Soap" in (genres or [])
+        or (network and network.get("name") in TELENOVELA_NETWORKS)
+        or any(term in source_text for term in TELENOVELA_TERMS)
+    ):
+        translated.append("Telenovela")
+
+    return sorted(dict.fromkeys(translated))
 
 
 def normalize_show(show, akas=None):
@@ -126,7 +159,7 @@ def normalize_show(show, akas=None):
         "ended": show.get("ended"),
         "status": translated_status(show.get("status")),
         "language": show.get("language") or "Sin idioma",
-        "genres": translated_genres(show.get("genres")),
+        "genres": translated_genres(show.get("genres"), show=show, network=network),
         "summary": strip_html(show.get("summary")),
         "image_url": image.get("medium") or image.get("original"),
         "official_url": show.get("officialSite") or show.get("url"),

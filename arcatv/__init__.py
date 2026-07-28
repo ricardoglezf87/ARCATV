@@ -24,6 +24,24 @@ from .utils import (
 )
 
 
+GENRE_FILTER_OPTIONS = [
+    "Acción",
+    "Aventura",
+    "Anime",
+    "Ciencia ficción",
+    "Comedia",
+    "Crimen",
+    "Drama",
+    "Fantasía",
+    "Misterio",
+    "Romance",
+    "Sobrenatural",
+    "Suspense",
+    "Telenovela",
+    "Terror",
+]
+
+
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
@@ -36,11 +54,12 @@ def create_app(test_config=None):
         TVMAZE_CACHE_EPISODES_SECONDS=6 * 60 * 60,
         TVMAZE_CACHE_CATALOG_SECONDS=7 * 24 * 60 * 60,
         TVMAZE_RECOMMENDATION_PAGES=10,
+        TVMAZE_RECOMMENDATION_RECENT_PAGES=12,
         RECOMMENDATION_LIMIT=24,
         TRANSLATE_TO_SPANISH=True,
         TRANSLATION_CACHE_SECONDS=30 * 24 * 60 * 60,
         MYMEMORY_BASE_URL="https://api.mymemory.translated.net",
-        AUTO_REFRESH_ON_DASHBOARD=True,
+        AUTO_REFRESH_ON_DASHBOARD=False,
     )
 
     if test_config:
@@ -64,27 +83,22 @@ def register_routes(app):
     def dashboard():
         shows = []
         sync_errors = []
-        refresh = current_app.config["AUTO_REFRESH_ON_DASHBOARD"]
+        show_finalized = request.args.get("estado") == "todas"
 
         for saved_show in store.list_shows():
             show = saved_show
-            try:
-                if refresh:
-                    show_data, akas = get_show_with_akas(show["id"], refresh=True)
-                    if show_data:
-                        show = normalize_show_for_display(show_data, akas=akas)
-                        store.upsert_show(show)
+            if not show_finalized and is_show_finalized(show):
+                continue
 
-                episodes = get_show_episodes(show["id"], refresh=refresh)
-            except TVMazeError:
-                episodes = []
-                sync_errors.append(show["name"])
+            episodes = get_show_episodes_cached(show["id"])
 
             watched_ids = store.get_watched_ids(show["id"])
             latest_watched_at = store.get_latest_watched_at(show["id"])
             shows.append(build_show_state(show, episodes, watched_ids, latest_watched_at))
 
         shows = sort_dashboard_shows(shows)
+        all_shows = store.list_shows()
+        hidden_finalized_count = sum(1 for show in all_shows if is_show_finalized(show))
 
         upcoming = sort_upcoming(
             episode
@@ -94,6 +108,8 @@ def register_routes(app):
 
         totals = {
             "shows": len(shows),
+            "all_shows": len(all_shows),
+            "hidden_finalized": hidden_finalized_count if not show_finalized else 0,
             "watched": sum(show["watched_count"] for show in shows),
             "aired": sum(show["aired_count"] for show in shows),
             "upcoming": len(upcoming),
@@ -105,11 +121,42 @@ def register_routes(app):
             upcoming=upcoming[:8],
             sync_errors=sync_errors,
             totals=totals,
+            show_finalized=show_finalized,
         )
+
+    @app.post("/actualizar")
+    def refresh_library():
+        include_finalized = request.form.get("alcance") == "todas"
+        updated = 0
+        failed = []
+
+        for saved_show in store.list_shows():
+            if not include_finalized and is_show_finalized(saved_show):
+                continue
+
+            try:
+                show_data, akas = get_show_with_akas(saved_show["id"], refresh=True)
+                if show_data:
+                    store.upsert_show(normalize_show_for_display(show_data, akas=akas))
+                get_show_episodes(saved_show["id"], refresh=True)
+                updated += 1
+            except TVMazeError:
+                failed.append(saved_show["name"])
+
+        if updated:
+            scope = "todas las series" if include_finalized else "las series en emisión"
+            flash(f"Se actualizaron {updated} de {scope}.", "success")
+        if failed:
+            flash(f"No se pudieron actualizar: {', '.join(failed)}.", "warning")
+        if not updated and not failed:
+            flash("No había series para actualizar con ese filtro.", "warning")
+
+        return redirect_to_next(url_for("dashboard"))
 
     @app.get("/buscar")
     def search():
         query = request.args.get("q", "").strip()
+        selected_genre = request.args.get("genero", "").strip()
         results = []
         error = None
         saved_ids = store.get_show_ids()
@@ -131,10 +178,22 @@ def register_routes(app):
                     )
                     for item in raw_results
                 ]
+                if selected_genre:
+                    results = [
+                        show for show in results
+                        if selected_genre in (show.get("genres") or [])
+                    ]
             except TVMazeError as exc:
                 error = str(exc)
 
-        return render_template("search.html", query=query, results=results, error=error)
+        return render_template(
+            "search.html",
+            query=query,
+            results=results,
+            error=error,
+            genres=GENRE_FILTER_OPTIONS,
+            selected_genre=selected_genre,
+        )
 
     @app.post("/series/<int:show_id>/add")
     def add_show(show_id):
@@ -170,18 +229,7 @@ def register_routes(app):
 
         show_watched = request.args.get("vistos") == "1"
         sync_error = None
-        try:
-            show_data, akas = get_show_with_akas(show_id, refresh=True)
-            if show_data:
-                show = normalize_show_for_display(show_data, akas=akas)
-                store.upsert_show(show)
-            episodes = get_show_episodes(show_id, refresh=True)
-        except TVMazeError as exc:
-            try:
-                episodes = get_show_episodes(show_id)
-            except TVMazeError:
-                episodes = []
-            sync_error = str(exc)
+        episodes = get_show_episodes_cached(show_id)
 
         watched_ids = store.get_watched_ids(show_id)
         latest_watched_at = store.get_latest_watched_at(show_id)
@@ -334,21 +382,14 @@ def register_routes(app):
     def upcoming():
         upcoming_episodes = []
         sync_errors = []
-        refresh = current_app.config["AUTO_REFRESH_ON_DASHBOARD"]
+        show_finalized = request.args.get("estado") == "todas"
 
         for saved_show in store.list_shows():
             show = saved_show
-            try:
-                if refresh:
-                    show_data, akas = get_show_with_akas(show["id"], refresh=True)
-                    if show_data:
-                        show = normalize_show_for_display(show_data, akas=akas)
-                        store.upsert_show(show)
-
-                episodes = get_show_episodes(show["id"], refresh=refresh)
-            except TVMazeError:
-                sync_errors.append(show["name"])
+            if not show_finalized and is_show_finalized(show):
                 continue
+
+            episodes = get_show_episodes_cached(show["id"])
 
             state = build_show_state(
                 show,
@@ -362,11 +403,20 @@ def register_routes(app):
             "upcoming.html",
             upcoming=sort_upcoming(upcoming_episodes),
             sync_errors=sync_errors,
+            show_finalized=show_finalized,
         )
 
     @app.get("/recomendaciones")
     def recommendations():
         selected_genre = request.args.get("genero", "").strip()
+        current_year = date.today().year
+        year_from = request.args.get("desde", type=int)
+        year_to = request.args.get("hasta", type=int)
+        sort_mode = request.args.get("orden", "recientes")
+        if year_from is None and "desde" not in request.args:
+            year_from = current_year - 8
+        if sort_mode not in {"recientes", "puntuacion"}:
+            sort_mode = "recientes"
         sync_errors = []
 
         show_states = []
@@ -397,34 +447,26 @@ def register_routes(app):
             raw_candidates,
             store.get_show_ids(),
             selected_genre=selected_genre or None,
+            year_from=year_from,
+            year_to=year_to,
+            sort_mode=sort_mode,
             limit=current_app.config["RECOMMENDATION_LIMIT"],
         )
 
-        enriched_recommendations = []
-        for recommendation in recommendations:
-            try:
-                show_data, akas = get_show_with_akas(recommendation["id"])
-            except TVMazeError:
-                show_data, akas = None, []
-
-            if show_data:
-                enriched = normalize_show_for_display(show_data, akas=akas)
-                enriched.update(
-                    {
-                        "rating": recommendation["rating"],
-                        "affinity": recommendation["affinity"],
-                        "matched_genres": recommendation["matched_genres"],
-                    }
-                )
-                enriched_recommendations.append(enriched)
-            else:
-                enriched_recommendations.append(enhance_show_summary(recommendation))
+        enriched_recommendations = [
+            enhance_show_summary(recommendation)
+            for recommendation in recommendations
+        ]
 
         return render_template(
             "recommendations.html",
             recommendations=enriched_recommendations,
-            genres=genres,
+            genres=sorted(set(genres).union({"Telenovela"})),
             selected_genre=selected_genre,
+            year_from=year_from,
+            year_to=year_to,
+            sort_mode=sort_mode,
+            current_year=current_year,
             sync_errors=sync_errors,
             has_profile=bool(show_states),
         )
@@ -512,6 +554,11 @@ def redirect_to_next(default_url):
     return redirect(default_url)
 
 
+def is_show_finalized(show):
+    status = (show.get("status") or "").casefold()
+    return bool(show.get("ended")) or status in {"finalizada", "ended"}
+
+
 def get_show(show_id, refresh=False):
     return cached_json(
         f"show:{show_id}",
@@ -557,6 +604,10 @@ def get_show_episodes(show_id, refresh=False):
     )
 
 
+def get_show_episodes_cached(show_id):
+    return store.cache_get(f"episodes:{show_id}", allow_expired=True) or []
+
+
 def get_shows_page(page, refresh=False):
     return cached_json(
         f"shows-page:{page}",
@@ -568,9 +619,42 @@ def get_shows_page(page, refresh=False):
 
 def get_recommendation_catalog():
     shows = []
-    for page in range(current_app.config["TVMAZE_RECOMMENDATION_PAGES"]):
+    last_page = get_last_catalog_page()
+    page_count = min(
+        current_app.config["TVMAZE_RECOMMENDATION_PAGES"],
+        current_app.config["TVMAZE_RECOMMENDATION_RECENT_PAGES"],
+    )
+    first_page = max(0, last_page - page_count + 1)
+
+    for page in range(last_page, first_page - 1, -1):
         page_items = get_shows_page(page)
         if not page_items:
-            break
+            continue
         shows.extend(page_items)
     return shows
+
+
+def get_last_catalog_page():
+    return cached_json(
+        "shows-last-page",
+        current_app.config["TVMAZE_CACHE_CATALOG_SECONDS"],
+        discover_last_catalog_page,
+    )
+
+
+def discover_last_catalog_page():
+    low = 0
+    high = 64
+
+    while get_shows_page(high):
+        low = high
+        high *= 2
+
+    while low + 1 < high:
+        middle = (low + high) // 2
+        if get_shows_page(middle):
+            low = middle
+        else:
+            high = middle
+
+    return low

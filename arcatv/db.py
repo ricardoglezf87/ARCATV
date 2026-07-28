@@ -211,7 +211,7 @@ def clear_show_progress(show_id):
     get_db().commit()
 
 
-def cache_get(key):
+def cache_get(key, allow_expired=False):
     row = get_db().execute(
         "SELECT payload, expires_at FROM api_cache WHERE cache_key = ?",
         (key,),
@@ -221,6 +221,8 @@ def cache_get(key):
 
     expires_at = datetime.fromisoformat(row["expires_at"])
     if expires_at <= datetime.now(timezone.utc):
+        if allow_expired:
+            return json.loads(row["payload"])
         cache_delete(key)
         return None
 

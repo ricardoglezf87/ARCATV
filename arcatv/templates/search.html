@@ -12,6 +12,13 @@
 <form class="wide-search search-page-form" action="{{ url_for('search') }}" method="get">
     <label class="sr-only" for="series-search">Nombre de la serie</label>
     <input id="series-search" name="q" type="search" placeholder="Nombre de la serie" value="{{ query }}" autofocus>
+    <label class="sr-only" for="search-genre">Género</label>
+    <select id="search-genre" name="genero">
+        <option value="">Todos</option>
+        {% for genre in genres %}
+            <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
+        {% endfor %}
+    </select>
     <button class="button button-primary" type="submit">Buscar</button>
 </form>
 

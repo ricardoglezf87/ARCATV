@@ -97,7 +97,8 @@ input {
 }
 
 .top-search input,
-.wide-search input {
+.wide-search input,
+.wide-search select {
     min-width: 0;
     width: 100%;
     border: 1px solid var(--border);
@@ -163,6 +164,18 @@ input {
     justify-content: space-between;
     gap: 20px;
     margin-bottom: 20px;
+}
+
+.header-actions,
+.view-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.view-toggles {
+    margin: -8px 0 20px;
 }
 
 .dashboard-header h1,
@@ -427,6 +440,15 @@ input {
 
 .filter-bar select {
     min-width: 210px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 10px 12px;
+}
+
+.filter-bar input {
+    width: 110px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface);
@@ -812,12 +834,14 @@ input {
     }
 
     .episode-actions,
+    .header-actions,
     .detail-actions {
         align-items: stretch;
         flex-direction: column;
     }
 
     .episode-actions .button,
+    .header-actions .button,
     .detail-actions .button,
     .result-title .button {
         width: 100%;

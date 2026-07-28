@@ -7,8 +7,31 @@
         <p class="eyebrow">Seguimiento personal</p>
         <h1>Mis series</h1>
     </div>
-    <a class="button button-primary" href="{{ url_for('search') }}">Añadir serie</a>
+    <div class="header-actions">
+        <form action="{{ url_for('refresh_library') }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="hidden" name="alcance" value="activas">
+            <button class="button button-secondary" type="submit">Actualizar en emisión</button>
+        </form>
+        <form action="{{ url_for('refresh_library') }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="hidden" name="alcance" value="todas">
+            <button class="button button-secondary" type="submit">Actualizar todas</button>
+        </form>
+        <a class="button button-primary" href="{{ url_for('search') }}">Añadir serie</a>
+    </div>
 </section>
+
+<div class="view-toggles" aria-label="Filtro de series">
+    {% if show_finalized %}
+        <a class="button button-secondary" href="{{ url_for('dashboard') }}">Ocultar finalizadas</a>
+    {% else %}
+        <a class="button button-secondary" href="{{ url_for('dashboard', estado='todas') }}">Mostrar finalizadas</a>
+        {% if totals.hidden_finalized %}
+            <span class="muted">{{ totals.hidden_finalized }} finalizadas ocultas</span>
+        {% endif %}
+    {% endif %}
+</div>
 
 {% if sync_errors %}
     <p class="inline-warning">No se pudieron actualizar ahora: {{ sync_errors | join(", ") }}.</p>
@@ -35,8 +58,13 @@
 
 {% if not shows %}
     <section class="empty-state">
-        <h2>Empieza buscando una serie</h2>
-        <p>Guarda tus favoritas y ARCATV irá mostrando progreso, episodios pendientes y nuevas emisiones.</p>
+        {% if totals.all_shows %}
+            <h2>No hay series activas visibles</h2>
+            <p>Las series finalizadas están ocultas para que el inicio cargue más ligero.</p>
+        {% else %}
+            <h2>Empieza buscando una serie</h2>
+            <p>Guarda tus favoritas y ARCATV irá mostrando progreso, episodios pendientes y nuevas emisiones.</p>
+        {% endif %}
         <form class="wide-search" action="{{ url_for('search') }}" method="get">
             <label class="sr-only" for="empty-search">Nombre de la serie</label>
             <input id="empty-search" name="q" type="search" placeholder="The Last of Us, Severance, Doctor Who...">

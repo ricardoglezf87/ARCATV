@@ -21,8 +21,17 @@
             <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
         {% endfor %}
     </select>
+    <label for="year-from">Desde</label>
+    <input id="year-from" name="desde" type="number" min="1900" max="{{ current_year + 1 }}" value="{{ year_from or '' }}">
+    <label for="year-to">Hasta</label>
+    <input id="year-to" name="hasta" type="number" min="1900" max="{{ current_year + 1 }}" value="{{ year_to or '' }}">
+    <label for="sort-mode">Orden</label>
+    <select id="sort-mode" name="orden">
+        <option value="recientes" {% if sort_mode == "recientes" %}selected{% endif %}>Más recientes</option>
+        <option value="puntuacion" {% if sort_mode == "puntuacion" %}selected{% endif %}>Mejor puntuación</option>
+    </select>
     <button class="button button-secondary" type="submit">Filtrar</button>
-    {% if selected_genre %}
+    {% if selected_genre or year_from or year_to or sort_mode != "recientes" %}
         <a class="button button-secondary" href="{{ url_for('recommendations') }}">Limpiar</a>
     {% endif %}
 </form>

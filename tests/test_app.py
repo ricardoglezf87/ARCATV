@@ -65,6 +65,31 @@ CANDIDATE_LOW_RATED = {
     "rating": {"average": 6.1},
 }
 
+CANDIDATE_OLD_HIGH_RATED = {
+    **CANDIDATE_HIGH_RATED,
+    "id": 4,
+    "name": "Drama Antiguo",
+    "premiered": "2005-01-01",
+    "rating": {"average": 9.9},
+}
+
+FINALIZED_SHOW = {
+    **SHOW,
+    "id": 5,
+    "name": "Serie Finalizada",
+    "status": "Ended",
+    "ended": "2021-01-01",
+}
+
+CANDIDATE_TELENOVELA = {
+    **CANDIDATE_HIGH_RATED,
+    "id": 6,
+    "name": "Telenovela Demo",
+    "premiered": "2024-02-01",
+    "genres": ["Soap", "Drama"],
+    "rating": {"average": 7.3},
+}
+
 
 class FakeTVMazeClient:
     def search_shows(self, query):
@@ -76,22 +101,31 @@ class FakeTVMazeClient:
             1: SHOW,
             2: CANDIDATE_HIGH_RATED,
             3: CANDIDATE_LOW_RATED,
+            4: CANDIDATE_OLD_HIGH_RATED,
+            5: FINALIZED_SHOW,
+            6: CANDIDATE_TELENOVELA,
         }
         return shows[show_id]
 
     def get_episodes(self, show_id):
         if show_id == 1:
             return EPISODES
-        assert show_id in {2, 3}
+        assert show_id in {2, 3, 4, 5, 6}
         return []
 
     def get_akas(self, show_id):
-        assert show_id in {1, 2, 3}
+        assert show_id in {1, 2, 3, 4, 5, 6}
         return []
 
     def get_shows_page(self, page):
         if page == 0:
-            return [SHOW, CANDIDATE_LOW_RATED, CANDIDATE_HIGH_RATED]
+            return [
+                SHOW,
+                CANDIDATE_LOW_RATED,
+                CANDIDATE_HIGH_RATED,
+                CANDIDATE_OLD_HIGH_RATED,
+                CANDIDATE_TELENOVELA,
+            ]
         return None
 
 
@@ -219,9 +253,16 @@ def test_recommendations_are_sorted_by_rating_and_filterable(client):
     assert "8.8" in html
     assert 'action="/series/2/add"' in html
     assert "Añadir" in html
+    assert "Drama Antiguo" not in html
 
     filtered_html = client.get("/recomendaciones?genero=Comedia").get_data(as_text=True)
     assert "Drama Excelente" not in filtered_html
+
+    telenovela_html = client.get("/recomendaciones?genero=Telenovela").get_data(as_text=True)
+    assert "Telenovela Demo" in telenovela_html
+
+    old_html = client.get("/recomendaciones?desde=2000&orden=puntuacion").get_data(as_text=True)
+    assert old_html.index("Drama Antiguo") < old_html.index("Drama Excelente")
 
 
 def test_can_add_recommendation_from_recommendations(client):
@@ -242,3 +283,10 @@ def test_can_add_recommendation_from_recommendations(client):
 
     assert response.status_code == 200
     assert "Drama Excelente" in html
+
+
+def test_finalized_shows_are_hidden_on_dashboard_by_default(client):
+    client.post("/series/5/add", follow_redirects=True)
+
+    assert "Serie Finalizada" not in client.get("/").get_data(as_text=True)
+    assert "Serie Finalizada" in client.get("/?estado=todas").get_data(as_text=True)
