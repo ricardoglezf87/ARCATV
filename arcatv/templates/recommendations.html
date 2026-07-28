@@ -58,6 +58,10 @@
                         <p class="tags">{{ show.matched_genres | join(" · ") }}</p>
                     {% endif %}
                     <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
+                    <form class="recommendation-actions" action="{{ url_for('add_show', show_id=show.id) }}" method="post">
+                        <input type="hidden" name="next" value="{{ request.full_path }}">
+                        <button class="button button-primary" type="submit">Añadir</button>
+                    </form>
                 </div>
             </article>
         {% endfor %}

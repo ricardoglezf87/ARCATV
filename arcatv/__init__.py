@@ -142,7 +142,7 @@ def register_routes(app):
             show_data, akas = get_show_with_akas(show_id, refresh=True)
         except TVMazeError as exc:
             flash(f"No se pudo añadir la serie: {exc}", "error")
-            return redirect(url_for("search", q=request.form.get("q", "")))
+            return redirect_to_next(url_for("search", q=request.form.get("q", "")))
 
         if not show_data:
             abort(404)

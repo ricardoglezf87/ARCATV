@@ -80,8 +80,10 @@ class FakeTVMazeClient:
         return shows[show_id]
 
     def get_episodes(self, show_id):
-        assert show_id == 1
-        return EPISODES
+        if show_id == 1:
+            return EPISODES
+        assert show_id in {2, 3}
+        return []
 
     def get_akas(self, show_id):
         assert show_id in {1, 2, 3}
@@ -215,6 +217,28 @@ def test_recommendations_are_sorted_by_rating_and_filterable(client):
 
     assert html.index("Drama Excelente") < html.index("Drama Correcto")
     assert "8.8" in html
+    assert 'action="/series/2/add"' in html
+    assert "Añadir" in html
 
     filtered_html = client.get("/recomendaciones?genero=Comedia").get_data(as_text=True)
     assert "Drama Excelente" not in filtered_html
+
+
+def test_can_add_recommendation_from_recommendations(client):
+    client.post("/series/1/add", follow_redirects=True)
+    client.post(
+        "/episodios/100/visto",
+        data={
+            "show_id": "1",
+            "season": "1",
+            "number": "1",
+            "name": "Piloto",
+            "watched": "1",
+        },
+    )
+
+    response = client.post("/series/2/add", follow_redirects=True)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Drama Excelente" in html

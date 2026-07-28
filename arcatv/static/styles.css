@@ -631,6 +631,10 @@ input {
     line-height: 1;
 }
 
+.recommendation-actions {
+    margin-top: 14px;
+}
+
 .episode-dialog {
     width: min(680px, calc(100% - 28px));
     max-height: min(760px, calc(100% - 28px));
