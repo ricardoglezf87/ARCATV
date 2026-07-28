@@ -43,6 +43,28 @@ EPISODES = [
     },
 ]
 
+CANDIDATE_HIGH_RATED = {
+    "id": 2,
+    "name": "Drama Excelente",
+    "premiered": "2022-01-01",
+    "ended": None,
+    "status": "Running",
+    "language": "English",
+    "genres": ["Drama"],
+    "summary": "<p>Otra serie dramática.</p>",
+    "image": None,
+    "officialSite": "https://example.com/drama",
+    "network": {"name": "Demo Network"},
+    "rating": {"average": 8.8},
+}
+
+CANDIDATE_LOW_RATED = {
+    **CANDIDATE_HIGH_RATED,
+    "id": 3,
+    "name": "Drama Correcto",
+    "rating": {"average": 6.1},
+}
+
 
 class FakeTVMazeClient:
     def search_shows(self, query):
@@ -50,16 +72,25 @@ class FakeTVMazeClient:
         return [{"score": 1, "show": SHOW}]
 
     def get_show(self, show_id):
-        assert show_id == 1
-        return SHOW
+        shows = {
+            1: SHOW,
+            2: CANDIDATE_HIGH_RATED,
+            3: CANDIDATE_LOW_RATED,
+        }
+        return shows[show_id]
 
     def get_episodes(self, show_id):
         assert show_id == 1
         return EPISODES
 
     def get_akas(self, show_id):
-        assert show_id == 1
+        assert show_id in {1, 2, 3}
         return []
+
+    def get_shows_page(self, page):
+        if page == 0:
+            return [SHOW, CANDIDATE_LOW_RATED, CANDIDATE_HIGH_RATED]
+        return None
 
 
 @pytest.fixture()
@@ -69,6 +100,8 @@ def app(tmp_path):
             "TESTING": True,
             "DATABASE": str(tmp_path / "arcatv-test.sqlite"),
             "TVMAZE_CLIENT": FakeTVMazeClient(),
+            "TRANSLATE_TO_SPANISH": False,
+            "TVMAZE_RECOMMENDATION_PAGES": 2,
         }
     )
 
@@ -163,3 +196,25 @@ def test_year_based_numbering_uses_absolute_episode_number():
     )
 
     assert episode_code(state["episodes"][1]) == "E2"
+
+
+def test_recommendations_are_sorted_by_rating_and_filterable(client):
+    client.post("/series/1/add", follow_redirects=True)
+    client.post(
+        "/episodios/100/visto",
+        data={
+            "show_id": "1",
+            "season": "1",
+            "number": "1",
+            "name": "Piloto",
+            "watched": "1",
+        },
+    )
+
+    html = client.get("/recomendaciones").get_data(as_text=True)
+
+    assert html.index("Drama Excelente") < html.index("Drama Correcto")
+    assert "8.8" in html
+
+    filtered_html = client.get("/recomendaciones?genero=Comedia").get_data(as_text=True)
+    assert "Drama Excelente" not in filtered_html

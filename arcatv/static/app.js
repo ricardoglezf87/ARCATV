@@ -7,33 +7,53 @@ const episodeDialogMeta = document.querySelector("#episode-dialog-meta");
 const episodeDialogSummary = document.querySelector("#episode-dialog-summary");
 
 document.querySelectorAll(".episode-open").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
         if (!episodeDialog) {
             return;
         }
 
-        const episode = JSON.parse(button.dataset.episode || "{}");
-        episodeDialogStatus.textContent = episode.status || "";
-        episodeDialogCode.textContent = episode.code || "";
-        episodeDialogTitle.textContent = episode.title || "Sin título";
-        episodeDialogMeta.textContent = [episode.show, episode.air, episode.runtime]
-            .filter(Boolean)
-            .join(" · ");
-        episodeDialogSummary.textContent = episode.summary || "Sin sinopsis disponible.";
+        const fallbackEpisode = JSON.parse(button.dataset.episode || "{}");
+        fillEpisodeDialog({ ...fallbackEpisode, summary: "Cargando descripción..." });
+        episodeDialog.showModal();
 
-        if (episode.image) {
-            episodeDialogImage.src = episode.image;
-            episodeDialogImage.alt = `Imagen de ${episode.title || "episodio"}`;
-            episodeDialogImage.hidden = false;
-        } else {
-            episodeDialogImage.removeAttribute("src");
-            episodeDialogImage.alt = "";
-            episodeDialogImage.hidden = true;
+        if (!button.dataset.detailUrl) {
+            fillEpisodeDialog(fallbackEpisode);
+            return;
         }
 
-        episodeDialog.showModal();
+        try {
+            const response = await fetch(button.dataset.detailUrl, {
+                headers: { Accept: "application/json" },
+            });
+            if (!response.ok) {
+                throw new Error("No se pudo cargar el episodio.");
+            }
+            fillEpisodeDialog(await response.json());
+        } catch {
+            fillEpisodeDialog(fallbackEpisode);
+        }
     });
 });
+
+function fillEpisodeDialog(episode) {
+    episodeDialogStatus.textContent = episode.status || "";
+    episodeDialogCode.textContent = episode.code || "";
+    episodeDialogTitle.textContent = episode.title || "Sin título";
+    episodeDialogMeta.textContent = [episode.show, episode.air, episode.runtime]
+            .filter(Boolean)
+            .join(" · ");
+    episodeDialogSummary.textContent = episode.summary || "Sin sinopsis disponible.";
+
+    if (episode.image) {
+        episodeDialogImage.src = episode.image;
+        episodeDialogImage.alt = `Imagen de ${episode.title || "episodio"}`;
+        episodeDialogImage.hidden = false;
+    } else {
+        episodeDialogImage.removeAttribute("src");
+        episodeDialogImage.alt = "";
+        episodeDialogImage.hidden = true;
+    }
+}
 
 episodeDialog?.addEventListener("click", (event) => {
     if (event.target === episodeDialog) {

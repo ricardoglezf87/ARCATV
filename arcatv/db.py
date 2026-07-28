@@ -10,6 +10,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS shows (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
+    original_name TEXT,
     premiered TEXT,
     ended TEXT,
     status TEXT,
@@ -59,7 +60,14 @@ def close_db(_error=None):
 def init_db():
     db = get_db()
     db.executescript(SCHEMA)
+    ensure_columns(db)
     db.commit()
+
+
+def ensure_columns(db):
+    show_columns = {row["name"] for row in db.execute("PRAGMA table_info(shows)").fetchall()}
+    if "original_name" not in show_columns:
+        db.execute("ALTER TABLE shows ADD COLUMN original_name TEXT")
 
 
 def init_app(app):
@@ -76,6 +84,7 @@ def row_to_show(row):
     return {
         "id": row["id"],
         "name": row["name"],
+        "original_name": row["original_name"],
         "premiered": row["premiered"],
         "ended": row["ended"],
         "status": row["status"],
@@ -108,12 +117,13 @@ def upsert_show(show):
     get_db().execute(
         """
         INSERT INTO shows (
-            id, name, premiered, ended, status, language, genres, summary,
+            id, name, original_name, premiered, ended, status, language, genres, summary,
             image_url, official_url, network, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
+            original_name = excluded.original_name,
             premiered = excluded.premiered,
             ended = excluded.ended,
             status = excluded.status,
@@ -128,6 +138,7 @@ def upsert_show(show):
         (
             show["id"],
             show["name"],
+            show.get("original_name"),
             show.get("premiered"),
             show.get("ended"),
             show.get("status"),

@@ -33,6 +33,9 @@ class TVMazeClient:
     def get_akas(self, show_id):
         return self._get(f"/shows/{show_id}/akas") or []
 
+    def get_shows_page(self, page):
+        return self._get("/shows", {"page": page})
+
     def _get(self, path, params=None):
         url = f"{self.base_url}{path}"
         headers = {"User-Agent": self.user_agent}

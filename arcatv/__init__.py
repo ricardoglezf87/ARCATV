@@ -1,9 +1,12 @@
+import hashlib
 from datetime import date
 from pathlib import Path
 
-from flask import Flask, abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import Flask, abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 
 from . import db as store
+from .recommendations import rank_recommendations
+from .translation import MyMemoryClient, TranslationError
 from .tvmaze import TVMazeClient, TVMazeError
 from .utils import (
     build_episode_groups,
@@ -17,6 +20,7 @@ from .utils import (
     normalize_show,
     sort_dashboard_shows,
     sort_upcoming,
+    strip_html,
 )
 
 
@@ -30,6 +34,12 @@ def create_app(test_config=None):
         TVMAZE_CACHE_SHOW_SECONDS=60 * 60,
         TVMAZE_CACHE_AKAS_SECONDS=24 * 60 * 60,
         TVMAZE_CACHE_EPISODES_SECONDS=6 * 60 * 60,
+        TVMAZE_CACHE_CATALOG_SECONDS=7 * 24 * 60 * 60,
+        TVMAZE_RECOMMENDATION_PAGES=10,
+        RECOMMENDATION_LIMIT=24,
+        TRANSLATE_TO_SPANISH=True,
+        TRANSLATION_CACHE_SECONDS=30 * 24 * 60 * 60,
+        MYMEMORY_BASE_URL="https://api.mymemory.translated.net",
         AUTO_REFRESH_ON_DASHBOARD=True,
     )
 
@@ -62,7 +72,7 @@ def register_routes(app):
                 if refresh:
                     show_data, akas = get_show_with_akas(show["id"], refresh=True)
                     if show_data:
-                        show = normalize_show(show_data, akas=akas)
+                        show = normalize_show_for_display(show_data, akas=akas)
                         store.upsert_show(show)
 
                 episodes = get_show_episodes(show["id"], refresh=refresh)
@@ -112,10 +122,12 @@ def register_routes(app):
                     lambda: get_tvmaze_client().search_shows(query),
                 )
                 results = [
-                    normalize_search_result(
-                        item,
-                        saved_ids,
-                        akas=safe_get_show_akas(item["show"]["id"]),
+                    enhance_show_summary(
+                        normalize_search_result(
+                            item,
+                            saved_ids,
+                            akas=safe_get_show_akas(item["show"]["id"]),
+                        )
                     )
                     for item in raw_results
                 ]
@@ -135,7 +147,7 @@ def register_routes(app):
         if not show_data:
             abort(404)
 
-        show = normalize_show(show_data, akas=akas)
+        show = normalize_show_for_display(show_data, akas=akas)
         store.upsert_show(show)
 
         try:
@@ -161,7 +173,7 @@ def register_routes(app):
         try:
             show_data, akas = get_show_with_akas(show_id, refresh=True)
             if show_data:
-                show = normalize_show(show_data, akas=akas)
+                show = normalize_show_for_display(show_data, akas=akas)
                 store.upsert_show(show)
             episodes = get_show_episodes(show_id, refresh=True)
         except TVMazeError as exc:
@@ -188,6 +200,28 @@ def register_routes(app):
             sync_error=sync_error,
         )
 
+    @app.get("/series/<int:show_id>/episodios/<int:episode_id>")
+    def episode_detail(show_id, episode_id):
+        show = store.get_show(show_id)
+        if not show:
+            abort(404)
+
+        try:
+            episodes = get_show_episodes(show_id)
+        except TVMazeError:
+            abort(404)
+
+        state = build_show_state(show, episodes, store.get_watched_ids(show_id))
+        episode = next(
+            (item for item in state["episodes"] if item["id"] == episode_id),
+            None,
+        )
+        if not episode:
+            abort(404)
+
+        enhance_episode_summary(episode)
+        return jsonify(episode_modal_payload(episode))
+
     @app.post("/series/<int:show_id>/refresh")
     def refresh_show(show_id):
         show = store.get_show(show_id)
@@ -204,7 +238,7 @@ def register_routes(app):
                 flash(f"No se encontró {show['name']} en TVmaze.", "error")
                 return redirect(url_for("show_detail", show_id=show_id))
 
-            store.upsert_show(normalize_show(show_data, akas=akas))
+            store.upsert_show(normalize_show_for_display(show_data, akas=akas))
             flash(f"{show_data['name']} se actualizó con {len(episodes)} episodios.", "success")
 
         return redirect(url_for("show_detail", show_id=show_id))
@@ -308,7 +342,7 @@ def register_routes(app):
                 if refresh:
                     show_data, akas = get_show_with_akas(show["id"], refresh=True)
                     if show_data:
-                        show = normalize_show(show_data, akas=akas)
+                        show = normalize_show_for_display(show_data, akas=akas)
                         store.upsert_show(show)
 
                 episodes = get_show_episodes(show["id"], refresh=refresh)
@@ -330,6 +364,71 @@ def register_routes(app):
             sync_errors=sync_errors,
         )
 
+    @app.get("/recomendaciones")
+    def recommendations():
+        selected_genre = request.args.get("genero", "").strip()
+        sync_errors = []
+
+        show_states = []
+        for show in store.list_shows():
+            try:
+                episodes = get_show_episodes(show["id"])
+            except TVMazeError:
+                episodes = []
+                sync_errors.append(show["name"])
+
+            show_states.append(
+                build_show_state(
+                    show,
+                    episodes,
+                    store.get_watched_ids(show["id"]),
+                    store.get_latest_watched_at(show["id"]),
+                )
+            )
+
+        try:
+            raw_candidates = get_recommendation_catalog()
+        except TVMazeError as exc:
+            raw_candidates = []
+            sync_errors.append(str(exc))
+
+        recommendations, genres = rank_recommendations(
+            show_states,
+            raw_candidates,
+            store.get_show_ids(),
+            selected_genre=selected_genre or None,
+            limit=current_app.config["RECOMMENDATION_LIMIT"],
+        )
+
+        enriched_recommendations = []
+        for recommendation in recommendations:
+            try:
+                show_data, akas = get_show_with_akas(recommendation["id"])
+            except TVMazeError:
+                show_data, akas = None, []
+
+            if show_data:
+                enriched = normalize_show_for_display(show_data, akas=akas)
+                enriched.update(
+                    {
+                        "rating": recommendation["rating"],
+                        "affinity": recommendation["affinity"],
+                        "matched_genres": recommendation["matched_genres"],
+                    }
+                )
+                enriched_recommendations.append(enriched)
+            else:
+                enriched_recommendations.append(enhance_show_summary(recommendation))
+
+        return render_template(
+            "recommendations.html",
+            recommendations=enriched_recommendations,
+            genres=genres,
+            selected_genre=selected_genre,
+            sync_errors=sync_errors,
+            has_profile=bool(show_states),
+        )
+
 
 def get_tvmaze_client():
     injected = current_app.config.get("TVMAZE_CLIENT")
@@ -339,6 +438,16 @@ def get_tvmaze_client():
     if "tvmaze_client" not in g:
         g.tvmaze_client = TVMazeClient(base_url=current_app.config["TVMAZE_BASE_URL"])
     return g.tvmaze_client
+
+
+def get_translation_client():
+    injected = current_app.config.get("TRANSLATION_CLIENT")
+    if injected:
+        return injected
+
+    if "translation_client" not in g:
+        g.translation_client = MyMemoryClient(base_url=current_app.config["MYMEMORY_BASE_URL"])
+    return g.translation_client
 
 
 def cached_json(key, ttl_seconds, producer, refresh=False):
@@ -355,6 +464,45 @@ def cached_json(key, ttl_seconds, producer, refresh=False):
 
     store.cache_set(key, payload, ttl_seconds)
     return payload
+
+
+def translate_text_to_spanish(text, namespace):
+    clean_text = strip_html(text)
+    if not clean_text or not current_app.config["TRANSLATE_TO_SPANISH"]:
+        return clean_text
+
+    digest = hashlib.sha1(clean_text.encode("utf-8")).hexdigest()
+    cache_key = f"translation:{namespace}:{digest}"
+    cached = store.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        translated = get_translation_client().translate_to_spanish(clean_text)
+    except TranslationError:
+        return clean_text
+
+    store.cache_set(cache_key, translated, current_app.config["TRANSLATION_CACHE_SECONDS"])
+    return translated
+
+
+def enhance_show_summary(show):
+    if show.get("summary"):
+        show["summary"] = translate_text_to_spanish(show["summary"], f"show:{show['id']}:summary")
+    return show
+
+
+def normalize_show_for_display(show_data, akas=None):
+    return enhance_show_summary(normalize_show(show_data, akas=akas))
+
+
+def enhance_episode_summary(episode):
+    if episode.get("summary"):
+        episode["summary"] = translate_text_to_spanish(
+            episode["summary"],
+            f"episode:{episode['id']}:summary",
+        )
+    return episode
 
 
 def redirect_to_next(default_url):
@@ -407,3 +555,22 @@ def get_show_episodes(show_id, refresh=False):
         lambda: get_tvmaze_client().get_episodes(show_id),
         refresh=refresh,
     )
+
+
+def get_shows_page(page, refresh=False):
+    return cached_json(
+        f"shows-page:{page}",
+        current_app.config["TVMAZE_CACHE_CATALOG_SECONDS"],
+        lambda: get_tvmaze_client().get_shows_page(page),
+        refresh=refresh,
+    )
+
+
+def get_recommendation_catalog():
+    shows = []
+    for page in range(current_app.config["TVMAZE_RECOMMENDATION_PAGES"]):
+        page_items = get_shows_page(page)
+        if not page_items:
+            break
+        shows.extend(page_items)
+    return shows

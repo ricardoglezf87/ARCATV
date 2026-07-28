@@ -103,14 +103,12 @@
                         class="episode-main episode-open"
                         type="button"
                         data-episode='{{ episode|episode_modal_payload|tojson }}'
+                        data-detail-url="{{ url_for('episode_detail', show_id=show.id, episode_id=episode.id) }}"
                     >
                         <span class="episode-code">{{ episode|episode_code }}</span>
                         <div>
                             <h4>{{ episode.name }}</h4>
                             <p class="muted">{{ episode|format_air_datetime }}</p>
-                            {% if episode.summary %}
-                                <p>{{ episode.summary }}</p>
-                            {% endif %}
                         </div>
                     </button>
                     <div class="episode-actions">

@@ -408,6 +408,32 @@ input {
     gap: 14px;
 }
 
+.filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin: 0 0 22px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 12px;
+}
+
+.filter-bar label {
+    color: var(--muted);
+    font-weight: 800;
+}
+
+.filter-bar select {
+    min-width: 210px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 10px 12px;
+}
+
 .result-row {
     display: grid;
     grid-template-columns: 96px minmax(0, 1fr);
@@ -537,6 +563,72 @@ input {
 .calendar-date {
     color: var(--coral);
     font-weight: 850;
+}
+
+.recommendation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+}
+
+.recommendation-card {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    min-height: 210px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.recommendation-poster {
+    display: block;
+    background: var(--surface-soft);
+}
+
+.recommendation-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.recommendation-body {
+    position: relative;
+    min-width: 0;
+    padding: 16px;
+}
+
+.recommendation-body h2 {
+    margin: 0;
+    padding-right: 72px;
+    font-size: 1.1rem;
+    line-height: 1.2;
+}
+
+.recommendation-score {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: grid;
+    min-width: 52px;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--primary);
+    color: white;
+    padding: 7px 8px;
+}
+
+.recommendation-score span {
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.recommendation-score strong {
+    font-size: 1.05rem;
+    line-height: 1;
 }
 
 .episode-dialog {
@@ -693,14 +785,26 @@ input {
     .metrics-grid,
     .show-card,
     .result-row,
+    .recommendation-card,
     .episode-row,
     .episode-main {
         grid-template-columns: 1fr;
     }
 
     .poster-link,
-    .result-poster {
+    .result-poster,
+    .recommendation-poster {
         height: 260px;
+    }
+
+    .recommendation-body h2 {
+        padding-right: 0;
+    }
+
+    .recommendation-score {
+        position: static;
+        width: max-content;
+        margin-bottom: 10px;
     }
 
     .episode-actions,

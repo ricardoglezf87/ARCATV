@@ -16,6 +16,7 @@
         <nav class="main-nav" aria-label="Navegación principal">
             <a href="{{ url_for('dashboard') }}">Mis series</a>
             <a href="{{ url_for('upcoming') }}">Próximos</a>
+            <a href="{{ url_for('recommendations') }}">Recomendaciones</a>
             <a href="{{ url_for('search') }}">Buscar</a>
         </nav>
         <form class="top-search" action="{{ url_for('search') }}" method="get">
@@ -42,6 +43,8 @@
     <footer class="footer">
         <span>Datos de series proporcionados por</span>
         <a href="https://www.tvmaze.com/api" target="_blank" rel="noreferrer">TVmaze</a>
+        <span>· traducciones por</span>
+        <a href="https://mymemory.translated.net/doc/spec.php" target="_blank" rel="noreferrer">MyMemory</a>
     </footer>
 </body>
 </html>

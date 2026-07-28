@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Recomendaciones · ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Según tu progreso</p>
+        <h1>Recomendaciones</h1>
+    </div>
+</section>
+
+{% if sync_errors %}
+    <p class="inline-warning">Algunas fuentes no respondieron ahora: {{ sync_errors | join(", ") }}.</p>
+{% endif %}
+
+<form class="filter-bar" action="{{ url_for('recommendations') }}" method="get">
+    <label for="genre-filter">Género</label>
+    <select id="genre-filter" name="genero">
+        <option value="">Todos</option>
+        {% for genre in genres %}
+            <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
+        {% endfor %}
+    </select>
+    <button class="button button-secondary" type="submit">Filtrar</button>
+    {% if selected_genre %}
+        <a class="button button-secondary" href="{{ url_for('recommendations') }}">Limpiar</a>
+    {% endif %}
+</form>
+
+{% if not recommendations %}
+    <section class="empty-state small">
+        <h2>Sin recomendaciones todavía</h2>
+        <p>Marca algunos capítulos como vistos o completa una serie para que ARCATV pueda comparar géneros y sugerir nuevas opciones.</p>
+    </section>
+{% else %}
+    <section class="recommendation-grid" aria-label="Series recomendadas">
+        {% for show in recommendations %}
+            <article class="recommendation-card">
+                <a class="recommendation-poster" href="{{ show.official_url or '#' }}" target="_blank" rel="noreferrer">
+                    {% if show.image_url %}
+                        <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}" loading="lazy">
+                    {% else %}
+                        <span class="poster-fallback">{{ show.name[:1] }}</span>
+                    {% endif %}
+                </a>
+                <div class="recommendation-body">
+                    <div class="recommendation-score">
+                        <span>Nota</span>
+                        <strong>{{ "%.1f"|format(show.rating) if show.rating else "N/D" }}</strong>
+                    </div>
+                    <h2>{{ show.name }}</h2>
+                    <p class="muted">
+                        {{ show.status }}
+                        {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
+                        {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
+                    </p>
+                    {% if show.matched_genres %}
+                        <p class="tags">{{ show.matched_genres | join(" · ") }}</p>
+                    {% endif %}
+                    <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}
