@@ -6,7 +6,11 @@ from .utils import normalize_show
 
 def rating_value(show):
     rating = show.get("rating") or {}
-    return rating.get("average") or 0
+    if isinstance(rating, dict):
+        return rating.get("average") or 0
+    if isinstance(rating, (int, float)):
+        return rating
+    return show.get("vote_average") or 0
 
 
 def premiered_year(show):
@@ -17,6 +21,19 @@ def premiered_year(show):
         return int(premiered[:4])
     except (TypeError, ValueError):
         return None
+
+
+def normalize_candidate(raw_show):
+    if raw_show.get("_normalized"):
+        return dict(raw_show)
+    show = normalize_show(raw_show)
+    show["source"] = "tvmaze"
+    show["source_label"] = "TVmaze"
+    return show
+
+
+def source_priority(show):
+    return 0 if show.get("source") == "tmdb" else 1
 
 
 def recommendation_profile(show_states):
@@ -53,12 +70,26 @@ def rank_recommendations(
 
     recommendations = []
     genre_options = set()
+    saved_signatures = {
+        (
+            (show.get("original_name") or show.get("name") or "").casefold(),
+            (show.get("premiered") or "")[:4],
+        )
+        for show in show_states
+    }
 
     for raw_show in raw_candidates:
         if raw_show.get("id") in saved_ids:
             continue
 
-        show = normalize_show(raw_show)
+        show = normalize_candidate(raw_show)
+        signature = (
+            (show.get("original_name") or show.get("name") or "").casefold(),
+            (show.get("premiered") or "")[:4],
+        )
+        if signature in saved_signatures:
+            continue
+
         year = premiered_year(show)
         if year_from and (year is None or year < year_from):
             continue
@@ -82,6 +113,7 @@ def rank_recommendations(
                 "affinity": round(min(100, affinity * 18 + rating * 4)),
                 "matched_genres": sorted(overlap),
                 "premiered_year": year,
+                "source_priority": source_priority(show),
             }
         )
         recommendations.append(show)
@@ -89,6 +121,7 @@ def rank_recommendations(
     if sort_mode == "puntuacion":
         recommendations.sort(
             key=lambda show: (
+                show["source_priority"],
                 -(show["rating"] or 0),
                 -(show.get("premiered_year") or 0),
                 -show["affinity"],
@@ -98,6 +131,7 @@ def rank_recommendations(
     else:
         recommendations.sort(
             key=lambda show: (
+                show["source_priority"],
                 -(show.get("premiered_year") or 0),
                 -(show["rating"] or 0),
                 -show["affinity"],
@@ -106,3 +140,45 @@ def rank_recommendations(
         )
 
     return recommendations[:limit], sorted(genre_options)
+
+
+def add_recommendation_reasons(recommendations, show_states):
+    source_shows = [
+        show for show in show_states
+        if show.get("watched_count") or show.get("completed")
+    ]
+
+    for recommendation in recommendations:
+        rec_genres = set(recommendation.get("genres") or [])
+        best_source = None
+        best_overlap = set()
+
+        for source in source_shows:
+            overlap = rec_genres.intersection(source.get("genres") or [])
+            if len(overlap) > len(best_overlap):
+                best_source = source
+                best_overlap = overlap
+
+        if best_source:
+            recommendation["reason"] = f"Porque viste {best_source['name']}"
+            recommendation["reason_detail"] = "Coincide en " + ", ".join(sorted(best_overlap))
+            recommendation["reason_source_id"] = best_source["id"]
+        else:
+            recommendation["reason"] = "Según tus series vistas"
+            recommendation["reason_detail"] = ""
+
+    return recommendations
+
+
+def top_profile_genres(show_states, limit=4):
+    return [genre for genre, _weight in recommendation_profile(show_states).most_common(limit)]
+
+
+def top_profile_platforms(show_states, limit=4):
+    counter = Counter()
+    for show in show_states:
+        if not show.get("watched_count") and not show.get("completed"):
+            continue
+        if show.get("network"):
+            counter[show["network"]] += 3 if show.get("completed") else 1
+    return [platform for platform, _weight in counter.most_common(limit)]

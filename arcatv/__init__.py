@@ -1,11 +1,25 @@
 import hashlib
+import os
 from datetime import date
 from pathlib import Path
 
 from flask import Flask, abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 
 from . import db as store
-from .recommendations import rank_recommendations
+from .recommendations import (
+    add_recommendation_reasons,
+    rank_recommendations,
+    top_profile_genres,
+    top_profile_platforms,
+)
+from .tmdb import (
+    TMDbClient,
+    TMDbError,
+    is_tmdb_show_id,
+    normalize_tmdb_episode,
+    normalize_tmdb_show,
+    tmdb_id_from_show_id,
+)
 from .translation import MyMemoryClient, TranslationError
 from .tvmaze import TVMazeClient, TVMazeError
 from .utils import (
@@ -42,6 +56,25 @@ GENRE_FILTER_OPTIONS = [
 ]
 
 
+def local_config_value(name):
+    if os.environ.get(name):
+        return os.environ[name]
+
+    seen_paths = set()
+    for env_path in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+        if env_path in seen_paths or not env_path.exists():
+            continue
+        seen_paths.add(env_path)
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            clean_line = line.strip()
+            if not clean_line or clean_line.startswith("#") or "=" not in clean_line:
+                continue
+            key, value = clean_line.split("=", 1)
+            if key.strip() == name:
+                return value.strip().strip('"').strip("'")
+    return None
+
+
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
@@ -56,6 +89,11 @@ def create_app(test_config=None):
         TVMAZE_RECOMMENDATION_PAGES=10,
         TVMAZE_RECOMMENDATION_RECENT_PAGES=12,
         RECOMMENDATION_LIMIT=24,
+        TMDB_API_KEY=local_config_value("TMDB_API_KEY"),
+        TMDB_BEARER_TOKEN=local_config_value("TMDB_BEARER_TOKEN"),
+        TMDB_BASE_URL="https://api.themoviedb.org/3",
+        TMDB_CACHE_SECONDS=24 * 60 * 60,
+        TRANSLATE_TMDB_SUMMARIES=False,
         TRANSLATE_TO_SPANISH=True,
         TRANSLATION_CACHE_SECONDS=30 * 24 * 60 * 60,
         MYMEMORY_BASE_URL="https://api.mymemory.translated.net",
@@ -145,12 +183,12 @@ def register_routes(app):
                 continue
 
             try:
-                show_data, akas = get_show_with_akas(saved_show["id"], refresh=True)
-                if show_data:
-                    store.upsert_show(normalize_show_for_display(show_data, akas=akas))
+                updated_show = get_show_for_storage(saved_show["id"], refresh=True)
+                if updated_show:
+                    store.upsert_show(updated_show)
                 get_show_episodes(saved_show["id"], refresh=True)
                 updated += 1
-            except TVMazeError:
+            except (TVMazeError, TMDbError):
                 failed.append(saved_show["name"])
 
         if updated:
@@ -172,29 +210,17 @@ def register_routes(app):
         saved_ids = store.get_show_ids()
 
         if query:
-            try:
-                raw_results = cached_json(
-                    f"search:{query.lower()}",
-                    current_app.config["TVMAZE_CACHE_SEARCH_SECONDS"],
-                    lambda: get_tvmaze_client().search_shows(query),
-                )
+            if is_tmdb_enabled():
+                results = search_tmdb_results(query, saved_ids)
+
+            if not results:
+                results, error = search_tvmaze_results(query, saved_ids)
+
+            if selected_genre:
                 results = [
-                    enhance_show_summary(
-                        normalize_search_result(
-                            item,
-                            saved_ids,
-                            akas=safe_get_show_akas(item["show"]["id"]),
-                        )
-                    )
-                    for item in raw_results
+                    show for show in results
+                    if selected_genre in (show.get("genres") or [])
                 ]
-                if selected_genre:
-                    results = [
-                        show for show in results
-                        if selected_genre in (show.get("genres") or [])
-                    ]
-            except TVMazeError as exc:
-                error = str(exc)
 
         return render_template(
             "search.html",
@@ -203,25 +229,25 @@ def register_routes(app):
             error=error,
             genres=GENRE_FILTER_OPTIONS,
             selected_genre=selected_genre,
+            tmdb_enabled=is_tmdb_enabled(),
         )
 
     @app.post("/series/<int:show_id>/add")
     def add_show(show_id):
         try:
-            show_data, akas = get_show_with_akas(show_id, refresh=True)
-        except TVMazeError as exc:
+            show = get_show_for_storage(show_id, refresh=True)
+        except (TVMazeError, TMDbError) as exc:
             flash(f"No se pudo añadir la serie: {exc}", "error")
             return redirect_to_next(url_for("search", q=request.form.get("q", "")))
 
-        if not show_data:
+        if not show:
             abort(404)
 
-        show = normalize_show_for_display(show_data, akas=akas)
         store.upsert_show(show)
 
         try:
             get_show_episodes(show_id, refresh=True)
-        except TVMazeError:
+        except (TVMazeError, TMDbError):
             flash(
                 f"{show['name']} se añadió, pero los episodios se sincronizarán al abrirla.",
                 "warning",
@@ -266,7 +292,7 @@ def register_routes(app):
 
         try:
             episodes = get_show_episodes(show_id)
-        except TVMazeError:
+        except (TVMazeError, TMDbError):
             abort(404)
 
         state = build_show_state(show, episodes, store.get_watched_ids(show_id))
@@ -287,17 +313,17 @@ def register_routes(app):
             abort(404)
 
         try:
-            show_data, akas = get_show_with_akas(show_id, refresh=True)
+            updated_show = get_show_for_storage(show_id, refresh=True)
             episodes = get_show_episodes(show_id, refresh=True)
-        except TVMazeError as exc:
+        except (TVMazeError, TMDbError) as exc:
             flash(f"No se pudo actualizar {show['name']}: {exc}", "error")
         else:
-            if not show_data:
+            if not updated_show:
                 flash(f"No se encontró {show['name']} en TVmaze.", "error")
                 return redirect(url_for("show_detail", show_id=show_id))
 
-            store.upsert_show(normalize_show_for_display(show_data, akas=akas))
-            flash(f"{show_data['name']} se actualizó con {len(episodes)} episodios.", "success")
+            store.upsert_show(updated_show)
+            flash(f"{updated_show['name']} se actualizó con {len(episodes)} episodios.", "success")
 
         return redirect(url_for("show_detail", show_id=show_id))
 
@@ -319,7 +345,7 @@ def register_routes(app):
 
         try:
             episodes = [normalize_episode(item, show) for item in get_show_episodes(show_id)]
-        except TVMazeError as exc:
+        except (TVMazeError, TMDbError) as exc:
             flash(f"No se pudieron cargar los episodios de {show['name']}: {exc}", "error")
             return redirect(url_for("show_detail", show_id=show_id))
 
@@ -351,7 +377,7 @@ def register_routes(app):
 
         try:
             episodes = [normalize_episode(item, show) for item in get_show_episodes(show_id)]
-        except TVMazeError as exc:
+        except (TVMazeError, TMDbError) as exc:
             flash(f"No se pudieron cargar los episodios de {show['name']}: {exc}", "error")
             return redirect(url_for("show_detail", show_id=show_id))
 
@@ -432,7 +458,7 @@ def register_routes(app):
         for show in store.list_shows():
             try:
                 episodes = get_show_episodes(show["id"])
-            except TVMazeError:
+            except (TVMazeError, TMDbError):
                 episodes = []
                 sync_errors.append(show["name"])
 
@@ -445,11 +471,12 @@ def register_routes(app):
                 )
             )
 
-        try:
-            raw_candidates = get_recommendation_catalog()
-        except TVMazeError as exc:
-            raw_candidates = []
-            sync_errors.append(str(exc))
+        raw_candidates = get_tmdb_profile_candidates(show_states)
+        if not raw_candidates or len(raw_candidates) < current_app.config["RECOMMENDATION_LIMIT"]:
+            try:
+                raw_candidates.extend(get_recommendation_catalog())
+            except TVMazeError as exc:
+                sync_errors.append(str(exc))
 
         recommendations, genres = rank_recommendations(
             show_states,
@@ -462,14 +489,16 @@ def register_routes(app):
             limit=current_app.config["RECOMMENDATION_LIMIT"],
         )
 
-        enriched_recommendations = [
+        enriched_recommendations = add_recommendation_reasons([
             enhance_show_summary(recommendation)
             for recommendation in recommendations
-        ]
+        ], show_states)
+        sections = build_recommendation_sections(enriched_recommendations, show_states)
 
         return render_template(
             "recommendations.html",
             recommendations=enriched_recommendations,
+            sections=sections,
             genres=sorted(set(genres).union({"Telenovela"})),
             selected_genre=selected_genre,
             year_from=year_from,
@@ -478,6 +507,7 @@ def register_routes(app):
             current_year=current_year,
             sync_errors=sync_errors,
             has_profile=bool(show_states),
+            tmdb_enabled=is_tmdb_enabled(),
         )
 
 
@@ -489,6 +519,24 @@ def get_tvmaze_client():
     if "tvmaze_client" not in g:
         g.tvmaze_client = TVMazeClient(base_url=current_app.config["TVMAZE_BASE_URL"])
     return g.tvmaze_client
+
+
+def get_tmdb_client():
+    injected = current_app.config.get("TMDB_CLIENT")
+    if injected:
+        return injected
+
+    if "tmdb_client" not in g:
+        g.tmdb_client = TMDbClient(
+            api_key=current_app.config.get("TMDB_API_KEY"),
+            bearer_token=current_app.config.get("TMDB_BEARER_TOKEN"),
+            base_url=current_app.config["TMDB_BASE_URL"],
+        )
+    return g.tmdb_client
+
+
+def is_tmdb_enabled():
+    return get_tmdb_client().enabled
 
 
 def get_translation_client():
@@ -508,7 +556,7 @@ def cached_json(key, ttl_seconds, producer, refresh=False):
 
     try:
         payload = producer()
-    except TVMazeError:
+    except (TVMazeError, TMDbError):
         if cached is not None:
             return cached
         raise
@@ -537,7 +585,24 @@ def translate_text_to_spanish(text, namespace):
     return translated
 
 
+def safe_is_tmdb_show_id(value):
+    try:
+        return value is not None and is_tmdb_show_id(value)
+    except (TypeError, ValueError):
+        return False
+
+
+def show_uses_tmdb(show):
+    return show.get("source") == "tmdb" or safe_is_tmdb_show_id(show.get("id"))
+
+
+def episode_uses_tmdb(episode):
+    return safe_is_tmdb_show_id(episode.get("show_id"))
+
+
 def enhance_show_summary(show):
+    if show_uses_tmdb(show) and not current_app.config["TRANSLATE_TMDB_SUMMARIES"]:
+        return show
     if show.get("summary"):
         show["summary"] = translate_text_to_spanish(show["summary"], f"show:{show['id']}:summary")
     return show
@@ -547,7 +612,143 @@ def normalize_show_for_display(show_data, akas=None):
     return enhance_show_summary(normalize_show(show_data, akas=akas))
 
 
+def show_signature(show):
+    return (
+        (show.get("original_name") or show.get("name") or "").casefold(),
+        (show.get("premiered") or "")[:4],
+    )
+
+
+def search_tvmaze_results(query, saved_ids, existing_results=None):
+    existing_keys = {show_signature(show) for show in (existing_results or [])}
+
+    try:
+        raw_results = cached_json(
+            f"search:{query.lower()}",
+            current_app.config["TVMAZE_CACHE_SEARCH_SECONDS"],
+            lambda: get_tvmaze_client().search_shows(query),
+        )
+    except TVMazeError as exc:
+        return [], f"TVmaze no respondió: {exc}."
+
+    results = []
+    for item in raw_results:
+        show = normalize_search_result(
+            item,
+            saved_ids,
+            akas=safe_get_show_akas(item["show"]["id"]),
+        )
+        if show_signature(show) in existing_keys:
+            continue
+        show["source"] = "tvmaze"
+        show["source_label"] = "TVmaze"
+        results.append(enhance_show_summary(show))
+    return results, None
+
+
+def search_tmdb_results(query, saved_ids, existing_results=None):
+    if not is_tmdb_enabled():
+        return []
+
+    existing_keys = {show_signature(show) for show in (existing_results or [])}
+
+    try:
+        raw_results = cached_json(
+            f"tmdb:search:{query.lower()}",
+            current_app.config["TMDB_CACHE_SECONDS"],
+            lambda: get_tmdb_client().search_tv(query),
+        )
+    except TMDbError:
+        return []
+
+    results = []
+    for raw_show in raw_results[:12]:
+        if not raw_show.get("id"):
+            continue
+        show = normalize_tmdb_show(raw_show)
+        if show_signature(show) in existing_keys:
+            continue
+        show["is_saved"] = show["id"] in saved_ids
+        results.append(show)
+    return results
+
+
+def build_recommendation_sections(recommendations, show_states):
+    if not recommendations:
+        return []
+
+    sections = [
+        {
+            "title": "Para ti ahora",
+            "subtitle": "Mezcla de géneros, puntuación y lo que ya has marcado como visto.",
+            "items": recommendations[:12],
+        },
+        {
+            "title": "Tops del momento para tus gustos",
+            "subtitle": "Series recientes y bien valoradas que encajan con tu perfil.",
+            "items": sorted(
+                recommendations,
+                key=lambda show: (
+                    -(show.get("premiered_year") or 0),
+                    -(show.get("rating") or 0),
+                ),
+            )[:12],
+        },
+    ]
+
+    source_shows = [
+        show for show in show_states
+        if show.get("watched_count") or show.get("completed")
+    ][:4]
+    for source in source_shows:
+        source_genres = set(source.get("genres") or [])
+        items = [
+            recommendation for recommendation in recommendations
+            if source_genres.intersection(recommendation.get("genres") or [])
+        ][:12]
+        if items:
+            sections.append(
+                {
+                    "title": f"Porque viste {source['name']}",
+                    "subtitle": "Coincidencias directas con esa serie.",
+                    "items": items,
+                }
+            )
+
+    for genre in top_profile_genres(show_states):
+        items = [
+            recommendation for recommendation in recommendations
+            if genre in (recommendation.get("genres") or [])
+        ][:12]
+        if items:
+            sections.append(
+                {
+                    "title": f"Top en {genre}",
+                    "subtitle": "Uno de tus géneros más repetidos.",
+                    "items": items,
+                }
+            )
+
+    for platform in top_profile_platforms(show_states):
+        items = [
+            recommendation for recommendation in recommendations
+            if recommendation.get("network") == platform
+        ][:12]
+        if items:
+            sections.append(
+                {
+                    "title": f"De {platform}",
+                    "subtitle": "Más opciones de cadenas o plataformas que ya aparecen en tus vistas.",
+                    "items": items,
+                }
+            )
+
+    return [section for section in sections if section["items"]]
+
+
 def enhance_episode_summary(episode):
+    if episode_uses_tmdb(episode) and not current_app.config["TRANSLATE_TMDB_SUMMARIES"]:
+        return episode
     if episode.get("summary"):
         episode["summary"] = translate_text_to_spanish(
             episode["summary"],
@@ -573,10 +774,36 @@ def is_show_completed(show_state):
 
 
 def get_show(show_id, refresh=False):
+    if is_tmdb_show_id(show_id):
+        return get_tmdb_show(show_id, refresh=refresh)
+
     return cached_json(
         f"show:{show_id}",
         current_app.config["TVMAZE_CACHE_SHOW_SECONDS"],
         lambda: get_tvmaze_client().get_show(show_id),
+        refresh=refresh,
+    )
+
+
+def get_show_for_storage(show_id, refresh=False):
+    if is_tmdb_show_id(show_id):
+        raw_show = get_tmdb_show(show_id, refresh=refresh)
+        if not raw_show:
+            return None
+        return normalize_tmdb_show(raw_show)
+
+    show_data, akas = get_show_with_akas(show_id, refresh=refresh)
+    if not show_data:
+        return None
+    return normalize_show_for_display(show_data, akas=akas)
+
+
+def get_tmdb_show(show_id, refresh=False):
+    tmdb_id = tmdb_id_from_show_id(show_id)
+    return cached_json(
+        f"tmdb:show:{tmdb_id}",
+        current_app.config["TMDB_CACHE_SECONDS"],
+        lambda: get_tmdb_client().get_tv(tmdb_id),
         refresh=refresh,
     )
 
@@ -609,10 +836,48 @@ def get_show_with_akas(show_id, refresh=False):
 
 
 def get_show_episodes(show_id, refresh=False):
+    if is_tmdb_show_id(show_id):
+        return get_tmdb_episodes(show_id, refresh=refresh)
+
     return cached_json(
         f"episodes:{show_id}",
         current_app.config["TVMAZE_CACHE_EPISODES_SECONDS"],
         lambda: get_tvmaze_client().get_episodes(show_id),
+        refresh=refresh,
+    )
+
+
+def get_tmdb_episodes(show_id, refresh=False):
+    tmdb_id = tmdb_id_from_show_id(show_id)
+
+    def load_episodes():
+        raw_show = get_tmdb_show(show_id, refresh=refresh)
+        if not raw_show:
+            return []
+        show = normalize_tmdb_show(raw_show)
+        episodes = []
+        for season in raw_show.get("seasons") or []:
+            season_number = season.get("season_number")
+            if season_number is None:
+                continue
+            raw_season = get_tmdb_season(tmdb_id, season_number, refresh=refresh)
+            for raw_episode in raw_season.get("episodes") or []:
+                episodes.append(normalize_tmdb_episode(raw_episode, show))
+        return episodes
+
+    return cached_json(
+        f"episodes:{show_id}",
+        current_app.config["TVMAZE_CACHE_EPISODES_SECONDS"],
+        load_episodes,
+        refresh=refresh,
+    )
+
+
+def get_tmdb_season(tmdb_id, season_number, refresh=False):
+    return cached_json(
+        f"tmdb:season:{tmdb_id}:{season_number}",
+        current_app.config["TMDB_CACHE_SECONDS"],
+        lambda: get_tmdb_client().get_season(tmdb_id, season_number),
         refresh=refresh,
     )
 
@@ -645,6 +910,91 @@ def get_recommendation_catalog():
             continue
         shows.extend(page_items)
     return shows
+
+
+def get_tmdb_profile_candidates(show_states):
+    if not is_tmdb_enabled():
+        return []
+
+    candidates = []
+    seen_ids = set()
+
+    def add_many(raw_items, source_label=None):
+        for raw_item in raw_items:
+            if not raw_item.get("id") or raw_item["id"] in seen_ids:
+                continue
+            seen_ids.add(raw_item["id"])
+            show = normalize_tmdb_show(raw_item)
+            if source_label:
+                show["source_label"] = source_label
+            candidates.append(show)
+
+    try:
+        trending = cached_json(
+            "tmdb:trending:tv:week",
+            current_app.config["TMDB_CACHE_SECONDS"],
+            lambda: get_tmdb_client().get_trending_tv("week"),
+        )
+        add_many(trending, source_label="TMDb tendencias")
+    except TMDbError:
+        pass
+
+    source_shows = [
+        show for show in show_states
+        if show.get("watched_count") or show.get("completed")
+    ][:5]
+    for source in source_shows:
+        tmdb_id = source.get("tmdb_id")
+        if not tmdb_id:
+            tmdb_id = find_tmdb_id_for_show(source)
+        if not tmdb_id:
+            continue
+
+        try:
+            recommended = cached_json(
+                f"tmdb:recommendations:{tmdb_id}",
+                current_app.config["TMDB_CACHE_SECONDS"],
+                lambda show_id=tmdb_id: get_tmdb_client().get_recommendations(show_id),
+            )
+            similar = cached_json(
+                f"tmdb:similar:{tmdb_id}",
+                current_app.config["TMDB_CACHE_SECONDS"],
+                lambda show_id=tmdb_id: get_tmdb_client().get_similar(show_id),
+            )
+        except TMDbError:
+            continue
+
+        add_many(recommended, source_label=f"TMDb por {source['name']}")
+        add_many(similar, source_label=f"TMDb similares a {source['name']}")
+
+    return candidates
+
+
+def find_tmdb_id_for_show(show):
+    show_id = show.get("id")
+    if show_id and is_tmdb_show_id(show_id):
+        return tmdb_id_from_show_id(show_id)
+
+    query = show.get("original_name") or show.get("name")
+    if not query:
+        return None
+
+    cache_key = f"tmdb:resolve:{query.lower()}:{(show.get('premiered') or '')[:4]}"
+    try:
+        results = cached_json(
+            cache_key,
+            current_app.config["TMDB_CACHE_SECONDS"],
+            lambda: get_tmdb_client().search_tv(query),
+        )
+    except TMDbError:
+        return None
+
+    wanted_year = (show.get("premiered") or "")[:4]
+    for result in results:
+        result_year = (result.get("first_air_date") or "")[:4]
+        if not wanted_year or result_year == wanted_year:
+            return result.get("id")
+    return results[0].get("id") if results else None
 
 
 def get_last_catalog_page():

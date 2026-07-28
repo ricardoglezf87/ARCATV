@@ -13,6 +13,10 @@
     <p class="inline-warning">Algunas fuentes no respondieron ahora: {{ sync_errors | join(", ") }}.</p>
 {% endif %}
 
+{% if not tmdb_enabled %}
+    <p class="inline-warning">TMDb no está configurado. Se usa TVmaze como catálogo principal hasta que configures TMDB_API_KEY.</p>
+{% endif %}
+
 <form class="filter-bar" action="{{ url_for('recommendations') }}" method="get">
     <label for="genre-filter">Género</label>
     <select id="genre-filter" name="genero">
@@ -36,44 +40,63 @@
     {% endif %}
 </form>
 
+{% macro recommendation_card(show) %}
+    <article class="recommendation-card">
+        <a class="recommendation-poster" href="{{ show.official_url or '#' }}" target="_blank" rel="noreferrer">
+            {% if show.image_url %}
+                <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}" loading="lazy">
+            {% else %}
+                <span class="poster-fallback">{{ show.name[:1] }}</span>
+            {% endif %}
+        </a>
+        <div class="recommendation-body">
+            <div class="recommendation-score">
+                <span>Nota</span>
+                <strong>{{ "%.1f"|format(show.rating) if show.rating else "N/D" }}</strong>
+            </div>
+            <h2>{{ show.name }}</h2>
+            <p class="muted">
+                {{ show.status }}
+                {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
+                {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
+                {% if show.network %} · {{ show.network }}{% endif %}
+                {% if show.source_label %} · {{ show.source_label }}{% endif %}
+            </p>
+            {% if show.reason %}
+                <p class="recommendation-reason">{{ show.reason }}</p>
+            {% endif %}
+            {% if show.matched_genres %}
+                <p class="tags">{{ show.matched_genres | join(" · ") }}</p>
+            {% endif %}
+            <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
+            <form class="recommendation-actions" action="{{ url_for('add_show', show_id=show.id) }}" method="post">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                <button class="button button-primary" type="submit">Añadir</button>
+            </form>
+        </div>
+    </article>
+{% endmacro %}
+
 {% if not recommendations %}
     <section class="empty-state small">
         <h2>Sin recomendaciones todavía</h2>
         <p>Marca algunos capítulos como vistos o completa una serie para que ARCATV pueda comparar géneros y sugerir nuevas opciones.</p>
     </section>
 {% else %}
-    <section class="recommendation-grid" aria-label="Series recomendadas">
-        {% for show in recommendations %}
-            <article class="recommendation-card">
-                <a class="recommendation-poster" href="{{ show.official_url or '#' }}" target="_blank" rel="noreferrer">
-                    {% if show.image_url %}
-                        <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}" loading="lazy">
-                    {% else %}
-                        <span class="poster-fallback">{{ show.name[:1] }}</span>
-                    {% endif %}
-                </a>
-                <div class="recommendation-body">
-                    <div class="recommendation-score">
-                        <span>Nota</span>
-                        <strong>{{ "%.1f"|format(show.rating) if show.rating else "N/D" }}</strong>
-                    </div>
-                    <h2>{{ show.name }}</h2>
-                    <p class="muted">
-                        {{ show.status }}
-                        {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
-                        {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
-                    </p>
-                    {% if show.matched_genres %}
-                        <p class="tags">{{ show.matched_genres | join(" · ") }}</p>
-                    {% endif %}
-                    <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
-                    <form class="recommendation-actions" action="{{ url_for('add_show', show_id=show.id) }}" method="post">
-                        <input type="hidden" name="next" value="{{ request.full_path }}">
-                        <button class="button button-primary" type="submit">Añadir</button>
-                    </form>
+    {% for section in sections %}
+        <section class="recommendation-section">
+            <div class="section-heading">
+                <div>
+                    <h2>{{ section.title }}</h2>
+                    <p class="muted">{{ section.subtitle }}</p>
                 </div>
-            </article>
-        {% endfor %}
-    </section>
+            </div>
+            <div class="recommendation-grid" aria-label="{{ section.title }}">
+                {% for show in section["items"] %}
+                    {{ recommendation_card(show) }}
+                {% endfor %}
+            </div>
+        </section>
+    {% endfor %}
 {% endif %}
 {% endblock %}

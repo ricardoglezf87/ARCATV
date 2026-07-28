@@ -30,18 +30,25 @@ SPANISH_COUNTRIES = [
 
 STATUS_TRANSLATIONS = {
     "Running": "En emisión",
+    "Returning Series": "En emisión",
     "Ended": "Finalizada",
+    "Canceled": "Cancelada",
+    "Cancelled": "Cancelada",
+    "Pilot": "Piloto",
     "To Be Determined": "Por confirmar",
     "In Development": "En desarrollo",
 }
 
 GENRE_TRANSLATIONS = {
     "Action": "Acción",
+    "Action & Adventure": "Acción y aventura",
     "Adventure": "Aventura",
+    "Animation": "Animación",
     "Anime": "Anime",
     "Children": "Infantil",
     "Comedy": "Comedia",
     "Crime": "Crimen",
+    "Documentary": "Documental",
     "Drama": "Drama",
     "Espionage": "Espionaje",
     "Family": "Familiar",
@@ -54,7 +61,10 @@ GENRE_TRANSLATIONS = {
     "Music": "Música",
     "Mystery": "Misterio",
     "Nature": "Naturaleza",
+    "News": "Noticias",
+    "Reality": "Reality",
     "Romance": "Romance",
+    "Sci-Fi & Fantasy": "Ciencia ficción y fantasía",
     "Science-Fiction": "Ciencia ficción",
     "Soap": "Telenovela",
     "Sports": "Deportes",
@@ -62,6 +72,7 @@ GENRE_TRANSLATIONS = {
     "Thriller": "Suspense",
     "Travel": "Viajes",
     "War": "Bélica",
+    "War & Politics": "Bélica y política",
     "Western": "Wéstern",
 }
 
@@ -200,7 +211,7 @@ def normalize_episode(episode, show):
         "airdate_value": airdate_value,
         "runtime": episode.get("runtime"),
         "summary": strip_html(episode.get("summary")),
-        "image_url": image.get("medium") or image.get("original"),
+        "image_url": episode.get("image_url") or image.get("medium") or image.get("original"),
         "watched": False,
         "aired": bool(airdate_value and airdate_value <= date.today()),
         "upcoming": bool(airdate_value and airdate_value > date.today()),

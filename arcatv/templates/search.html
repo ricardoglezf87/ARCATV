@@ -4,7 +4,7 @@
 {% block content %}
 <section class="dashboard-header">
     <div>
-        <p class="eyebrow">Catálogo TVmaze</p>
+        <p class="eyebrow">{{ "Catálogo TMDb" if tmdb_enabled else "Catálogo TVmaze" }}</p>
         <h1>Buscar series</h1>
     </div>
 </section>
@@ -53,6 +53,7 @@
                                 {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
                                 {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
                                 {% if show.network %} · {{ show.network }}{% endif %}
+                                {% if show.source_label %} · {{ show.source_label }}{% endif %}
                             </p>
                         </div>
                         {% if show.is_saved %}

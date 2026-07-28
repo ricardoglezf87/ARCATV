@@ -1,6 +1,7 @@
 import pytest
 
 from arcatv import create_app
+from arcatv.tmdb import synthetic_tmdb_show_id
 from arcatv.utils import build_show_state, episode_code, normalize_show
 
 
@@ -104,6 +105,44 @@ CANDIDATE_TELENOVELA = {
     "rating": {"average": 7.3},
 }
 
+TMDB_SHOW = {
+    "id": 42,
+    "name": "La Serie Perdida",
+    "original_name": "Lost Show",
+    "first_air_date": "2025-03-01",
+    "last_air_date": None,
+    "status": "Returning Series",
+    "original_language": "es",
+    "genres": [{"name": "Drama"}],
+    "genre_ids": [18],
+    "overview": "Una serie que aparece en el repositorio alternativo.",
+    "poster_path": None,
+    "homepage": "",
+    "networks": [{"name": "Netflix"}],
+    "vote_average": 7.9,
+    "seasons": [{"season_number": 1}],
+}
+
+TMDB_EPISODE = {
+    "id": 4201,
+    "name": "El hallazgo",
+    "season_number": 1,
+    "episode_number": 1,
+    "air_date": "2025-03-01",
+    "runtime": 45,
+    "overview": "La historia empieza.",
+    "still_path": None,
+}
+
+TMDB_RECOMMENDATION = {
+    **TMDB_SHOW,
+    "id": 43,
+    "name": "Drama de Moda",
+    "original_name": "Trending Drama",
+    "first_air_date": "2026-01-15",
+    "vote_average": 8.6,
+}
+
 
 class FakeTVMazeClient:
     def search_shows(self, query):
@@ -145,6 +184,56 @@ class FakeTVMazeClient:
         return None
 
 
+class EmptyTVMazeClient(FakeTVMazeClient):
+    def search_shows(self, query):
+        assert query
+        return []
+
+
+class FakeTMDbClient:
+    enabled = True
+
+    def search_tv(self, query):
+        assert query
+        return [TMDB_SHOW]
+
+    def get_tv(self, series_id):
+        assert series_id == 42
+        return TMDB_SHOW
+
+    def get_season(self, series_id, season_number):
+        assert series_id == 42
+        assert season_number == 1
+        return {"episodes": [TMDB_EPISODE]}
+
+    def get_trending_tv(self, time_window="week"):
+        return []
+
+    def get_recommendations(self, series_id):
+        assert series_id == 42
+        return [TMDB_RECOMMENDATION]
+
+    def get_similar(self, series_id):
+        return []
+
+
+class EmptyTMDbClient(FakeTMDbClient):
+    def search_tv(self, query):
+        assert query
+        return []
+
+    def get_trending_tv(self, time_window="week"):
+        return []
+
+    def get_recommendations(self, series_id):
+        return []
+
+
+class ExplodingTranslationClient:
+    def translate_to_spanish(self, text):
+        raise AssertionError(f"No se esperaba traducir: {text}")
+
+
 @pytest.fixture()
 def app(tmp_path):
     return create_app(
@@ -152,6 +241,8 @@ def app(tmp_path):
             "TESTING": True,
             "DATABASE": str(tmp_path / "arcatv-test.sqlite"),
             "TVMAZE_CLIENT": FakeTVMazeClient(),
+            "TMDB_API_KEY": None,
+            "TMDB_BEARER_TOKEN": None,
             "TRANSLATE_TO_SPANISH": False,
             "TVMAZE_RECOMMENDATION_PAGES": 2,
         }
@@ -269,6 +360,8 @@ def test_recommendations_are_sorted_by_rating_and_filterable(client):
     assert "8.8" in html
     assert 'action="/series/2/add"' in html
     assert "Añadir" in html
+    assert "Porque viste Serie Demo" in html
+    assert "Tops del momento" in html
     assert "Drama Antiguo" not in html
 
     filtered_html = client.get("/recomendaciones?genero=Comedia").get_data(as_text=True)
@@ -299,6 +392,122 @@ def test_can_add_recommendation_from_recommendations(client):
 
     assert response.status_code == 200
     assert "Drama Excelente" in html
+
+
+def test_can_search_and_add_show_from_tmdb_fallback(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-tmdb-test.sqlite"),
+            "TVMAZE_CLIENT": EmptyTVMazeClient(),
+            "TMDB_CLIENT": FakeTMDbClient(),
+            "TRANSLATE_TO_SPANISH": False,
+        }
+    )
+    client = app.test_client()
+    tmdb_show_id = synthetic_tmdb_show_id(42)
+
+    html = client.get("/buscar?q=perdida").get_data(as_text=True)
+
+    assert "La Serie Perdida" in html
+    assert "TMDb" in html
+    assert f'action="/series/{tmdb_show_id}/add"' in html
+
+    response = client.post(f"/series/{tmdb_show_id}/add", follow_redirects=True)
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "La Serie Perdida" in html
+    assert "El hallazgo" in html
+
+
+def test_tmdb_is_primary_search_source_when_configured(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-tmdb-primary-search-test.sqlite"),
+            "TVMAZE_CLIENT": FakeTVMazeClient(),
+            "TMDB_CLIENT": FakeTMDbClient(),
+            "TRANSLATE_TO_SPANISH": False,
+        }
+    )
+    client = app.test_client()
+
+    html = client.get("/buscar?q=demo").get_data(as_text=True)
+
+    assert "La Serie Perdida" in html
+    assert "TMDb" in html
+    assert "Serie Demo" not in html
+
+
+def test_tvmaze_is_search_fallback_when_tmdb_has_no_results(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-tvmaze-search-fallback-test.sqlite"),
+            "TVMAZE_CLIENT": FakeTVMazeClient(),
+            "TMDB_CLIENT": EmptyTMDbClient(),
+            "TRANSLATE_TO_SPANISH": False,
+        }
+    )
+    client = app.test_client()
+
+    html = client.get("/buscar?q=demo").get_data(as_text=True)
+
+    assert "Serie Demo" in html
+    assert "TVmaze" in html
+
+
+def test_tmdb_search_results_skip_external_translation(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-tmdb-no-translation-test.sqlite"),
+            "TVMAZE_CLIENT": FakeTVMazeClient(),
+            "TMDB_CLIENT": FakeTMDbClient(),
+            "TRANSLATION_CLIENT": ExplodingTranslationClient(),
+            "TRANSLATE_TO_SPANISH": True,
+        }
+    )
+    client = app.test_client()
+
+    response = client.get("/buscar?q=demo")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Una serie que aparece en el repositorio alternativo." in html
+
+
+def test_tmdb_recommendations_are_personalized_by_watched_profile(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-tmdb-recommendations-test.sqlite"),
+            "TVMAZE_CLIENT": FakeTVMazeClient(),
+            "TMDB_CLIENT": FakeTMDbClient(),
+            "TRANSLATE_TO_SPANISH": False,
+            "TVMAZE_RECOMMENDATION_PAGES": 2,
+        }
+    )
+    client = app.test_client()
+    client.post("/series/1/add", follow_redirects=True)
+    client.post(
+        "/episodios/100/visto",
+        data={
+            "show_id": "1",
+            "season": "1",
+            "number": "1",
+            "name": "Piloto",
+            "watched": "1",
+        },
+    )
+
+    html = client.get("/recomendaciones").get_data(as_text=True)
+
+    assert "Drama de Moda" in html
+    assert "Porque viste Serie Demo" in html
+    assert "TMDb por Serie Demo" in html
+    assert "8.6" in html
 
 
 def test_only_completed_shows_are_hidden_on_dashboard_by_default(client):

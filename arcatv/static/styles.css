@@ -593,6 +593,10 @@ input {
     gap: 16px;
 }
 
+.recommendation-section {
+    margin-top: 26px;
+}
+
 .recommendation-card {
     display: grid;
     grid-template-columns: 110px minmax(0, 1fr);
@@ -655,6 +659,17 @@ input {
 
 .recommendation-actions {
     margin-top: 14px;
+}
+
+.recommendation-reason {
+    display: inline-flex;
+    margin-top: 10px;
+    border-radius: 999px;
+    background: #eef7f5;
+    color: var(--primary-strong);
+    padding: 5px 10px;
+    font-size: 0.85rem;
+    font-weight: 800;
 }
 
 .episode-dialog {
