@@ -4,7 +4,9 @@ Aplicación web en Python para llevar el seguimiento de series de TV: guarda tus
 
 ## Fuente de datos
 
-ARCATV usa la API pública de [TVmaze](https://www.tvmaze.com/api), que ofrece búsquedas, fichas de series y listados de episodios en JSON sin necesidad de clave. Los datos se guardan en caché local durante unas horas para que la experiencia sea rápida y respetuosa con el servicio.
+ARCATV usa la API pública de [TVmaze](https://www.tvmaze.com/api), que ofrece búsquedas, fichas de series, alias por país y listados de episodios en JSON sin necesidad de clave. Los datos se guardan en caché local durante unas horas para que la experiencia sea rápida y respetuosa con el servicio.
+
+Cuando TVmaze tiene un alias para España o países hispanohablantes, ARCATV usa ese nombre en la interfaz. Si no existe alias en español, mantiene el título original.
 
 ## Puesta en marcha
 
@@ -24,6 +26,10 @@ Después abre `http://127.0.0.1:5000`.
 - Buscar series en TVmaze y añadirlas a tu lista.
 - Ver póster, sinopsis, cadena, géneros y estado de cada serie.
 - Marcar episodios vistos uno a uno, hasta un punto concreto o todos los emitidos.
+- Ocultar capítulos vistos por defecto y mostrarlos cuando lo necesites.
+- Abrir una ventana emergente con más información al seleccionar un capítulo.
 - Ver progreso por serie y el siguiente episodio pendiente.
 - Consultar una vista ordenada de próximos capítulos de tus series guardadas.
+- Ordenar el panel para priorizar series con pendientes según tu último episodio marcado como visto.
+- Mostrar numeración absoluta en series con temporadas anuales, útil para casos como anime largo.
 - Guardar todo el progreso en una base SQLite local dentro de `instance/`.

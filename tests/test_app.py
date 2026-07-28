@@ -1,6 +1,7 @@
 import pytest
 
 from arcatv import create_app
+from arcatv.utils import build_show_state, episode_code, normalize_show
 
 
 SHOW = {
@@ -55,6 +56,10 @@ class FakeTVMazeClient:
     def get_episodes(self, show_id):
         assert show_id == 1
         return EPISODES
+
+    def get_akas(self, show_id):
+        assert show_id == 1
+        return []
 
 
 @pytest.fixture()
@@ -119,3 +124,42 @@ def test_upcoming_lists_future_episodes(client):
     assert response.status_code == 200
     assert "Futuro" in html
     assert "Serie Demo" in html
+
+
+def test_watched_episodes_are_hidden_by_default(client):
+    client.post("/series/1/add", follow_redirects=True)
+    client.post(
+        "/episodios/100/visto",
+        data={
+            "show_id": "1",
+            "season": "1",
+            "number": "1",
+            "name": "Piloto",
+            "watched": "1",
+        },
+    )
+
+    assert "Piloto" not in client.get("/series/1").get_data(as_text=True)
+    assert "Piloto" in client.get("/series/1?vistos=1").get_data(as_text=True)
+
+
+def test_spanish_aka_is_preferred_when_available():
+    show = normalize_show(
+        SHOW,
+        akas=[{"name": "Serie Demo España", "country": {"code": "ES"}}],
+    )
+
+    assert show["name"] == "Serie Demo España"
+
+
+def test_year_based_numbering_uses_absolute_episode_number():
+    state = build_show_state(
+        SHOW,
+        [
+            {**EPISODES[0], "id": 200, "season": 2025, "number": 36},
+            {**EPISODES[1], "id": 201, "season": 2026, "number": 17},
+        ],
+        watched_ids=set(),
+    )
+
+    assert episode_code(state["episodes"][1]) == "E2"

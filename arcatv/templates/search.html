@@ -43,6 +43,7 @@
                             <h2>{{ show.name }}</h2>
                             <p class="muted">
                                 {{ show.status }}
+                                {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
                                 {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
                                 {% if show.network %} · {{ show.network }}{% endif %}
                             </p>

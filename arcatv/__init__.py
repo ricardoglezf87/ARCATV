@@ -9,11 +9,13 @@ from .utils import (
     build_episode_groups,
     build_show_state,
     episode_code,
+    episode_modal_payload,
     format_air_datetime,
     format_date,
     normalize_episode,
     normalize_search_result,
     normalize_show,
+    sort_dashboard_shows,
     sort_upcoming,
 )
 
@@ -26,7 +28,9 @@ def create_app(test_config=None):
         TVMAZE_BASE_URL="https://api.tvmaze.com",
         TVMAZE_CACHE_SEARCH_SECONDS=15 * 60,
         TVMAZE_CACHE_SHOW_SECONDS=60 * 60,
+        TVMAZE_CACHE_AKAS_SECONDS=24 * 60 * 60,
         TVMAZE_CACHE_EPISODES_SECONDS=6 * 60 * 60,
+        AUTO_REFRESH_ON_DASHBOARD=True,
     )
 
     if test_config:
@@ -40,6 +44,7 @@ def create_app(test_config=None):
 
 def register_template_helpers(app):
     app.template_filter("episode_code")(episode_code)
+    app.template_filter("episode_modal_payload")(episode_modal_payload)
     app.template_filter("format_date")(format_date)
     app.template_filter("format_air_datetime")(format_air_datetime)
 
@@ -49,16 +54,27 @@ def register_routes(app):
     def dashboard():
         shows = []
         sync_errors = []
+        refresh = current_app.config["AUTO_REFRESH_ON_DASHBOARD"]
 
-        for show in store.list_shows():
+        for saved_show in store.list_shows():
+            show = saved_show
             try:
-                episodes = get_show_episodes(show["id"])
+                if refresh:
+                    show_data, akas = get_show_with_akas(show["id"], refresh=True)
+                    if show_data:
+                        show = normalize_show(show_data, akas=akas)
+                        store.upsert_show(show)
+
+                episodes = get_show_episodes(show["id"], refresh=refresh)
             except TVMazeError:
                 episodes = []
                 sync_errors.append(show["name"])
 
             watched_ids = store.get_watched_ids(show["id"])
-            shows.append(build_show_state(show, episodes, watched_ids))
+            latest_watched_at = store.get_latest_watched_at(show["id"])
+            shows.append(build_show_state(show, episodes, watched_ids, latest_watched_at))
+
+        shows = sort_dashboard_shows(shows)
 
         upcoming = sort_upcoming(
             episode
@@ -95,7 +111,14 @@ def register_routes(app):
                     current_app.config["TVMAZE_CACHE_SEARCH_SECONDS"],
                     lambda: get_tvmaze_client().search_shows(query),
                 )
-                results = [normalize_search_result(item, saved_ids) for item in raw_results]
+                results = [
+                    normalize_search_result(
+                        item,
+                        saved_ids,
+                        akas=safe_get_show_akas(item["show"]["id"]),
+                    )
+                    for item in raw_results
+                ]
             except TVMazeError as exc:
                 error = str(exc)
 
@@ -104,7 +127,7 @@ def register_routes(app):
     @app.post("/series/<int:show_id>/add")
     def add_show(show_id):
         try:
-            show_data = get_show(show_id, refresh=True)
+            show_data, akas = get_show_with_akas(show_id, refresh=True)
         except TVMazeError as exc:
             flash(f"No se pudo añadir la serie: {exc}", "error")
             return redirect(url_for("search", q=request.form.get("q", "")))
@@ -112,7 +135,7 @@ def register_routes(app):
         if not show_data:
             abort(404)
 
-        show = normalize_show(show_data)
+        show = normalize_show(show_data, akas=akas)
         store.upsert_show(show)
 
         try:
@@ -133,20 +156,34 @@ def register_routes(app):
         if not show:
             abort(404)
 
+        show_watched = request.args.get("vistos") == "1"
         sync_error = None
         try:
-            episodes = get_show_episodes(show_id)
+            show_data, akas = get_show_with_akas(show_id, refresh=True)
+            if show_data:
+                show = normalize_show(show_data, akas=akas)
+                store.upsert_show(show)
+            episodes = get_show_episodes(show_id, refresh=True)
         except TVMazeError as exc:
-            episodes = []
+            try:
+                episodes = get_show_episodes(show_id)
+            except TVMazeError:
+                episodes = []
             sync_error = str(exc)
 
         watched_ids = store.get_watched_ids(show_id)
-        state = build_show_state(show, episodes, watched_ids)
-        episode_groups = build_episode_groups(state["episodes"])
+        latest_watched_at = store.get_latest_watched_at(show_id)
+        state = build_show_state(show, episodes, watched_ids, latest_watched_at)
+        visible_episodes = state["episodes"] if show_watched else [
+            episode for episode in state["episodes"] if not episode["watched"]
+        ]
+        episode_groups = build_episode_groups(visible_episodes)
 
         return render_template(
             "show.html",
             show=state,
+            show_watched=show_watched,
+            visible_episode_count=len(visible_episodes),
             episode_groups=episode_groups,
             sync_error=sync_error,
         )
@@ -158,7 +195,7 @@ def register_routes(app):
             abort(404)
 
         try:
-            show_data = get_show(show_id, refresh=True)
+            show_data, akas = get_show_with_akas(show_id, refresh=True)
             episodes = get_show_episodes(show_id, refresh=True)
         except TVMazeError as exc:
             flash(f"No se pudo actualizar {show['name']}: {exc}", "error")
@@ -167,7 +204,7 @@ def register_routes(app):
                 flash(f"No se encontró {show['name']} en TVmaze.", "error")
                 return redirect(url_for("show_detail", show_id=show_id))
 
-            store.upsert_show(normalize_show(show_data))
+            store.upsert_show(normalize_show(show_data, akas=akas))
             flash(f"{show_data['name']} se actualizó con {len(episodes)} episodios.", "success")
 
         return redirect(url_for("show_detail", show_id=show_id))
@@ -202,7 +239,7 @@ def register_routes(app):
                 count += 1
 
         flash(f"Marcados {count} episodios emitidos de {show['name']}.", "success")
-        return redirect(url_for("show_detail", show_id=show_id))
+        return redirect_to_next(url_for("show_detail", show_id=show_id))
 
     @app.post("/series/<int:show_id>/clear")
     def clear_show_progress(show_id):
@@ -212,7 +249,7 @@ def register_routes(app):
 
         store.clear_show_progress(show_id)
         flash(f"Progreso reiniciado para {show['name']}.", "success")
-        return redirect(url_for("show_detail", show_id=show_id))
+        return redirect_to_next(url_for("show_detail", show_id=show_id))
 
     @app.post("/series/<int:show_id>/watch-through/<int:episode_id>")
     def watch_through(show_id, episode_id):
@@ -236,7 +273,7 @@ def register_routes(app):
                 break
 
         flash(f"Marcados {marked} episodios hasta ese punto.", "success")
-        return redirect(url_for("show_detail", show_id=show_id))
+        return redirect_to_next(url_for("show_detail", show_id=show_id))
 
     @app.post("/episodios/<int:episode_id>/visto")
     def set_episode_watched(episode_id):
@@ -257,22 +294,34 @@ def register_routes(app):
         else:
             store.unmark_episode(episode_id)
 
-        next_url = request.form.get("next") or url_for("show_detail", show_id=show_id)
-        return redirect(next_url)
+        return redirect_to_next(url_for("show_detail", show_id=show_id))
 
     @app.get("/proximos")
     def upcoming():
         upcoming_episodes = []
         sync_errors = []
+        refresh = current_app.config["AUTO_REFRESH_ON_DASHBOARD"]
 
-        for show in store.list_shows():
+        for saved_show in store.list_shows():
+            show = saved_show
             try:
-                episodes = get_show_episodes(show["id"])
+                if refresh:
+                    show_data, akas = get_show_with_akas(show["id"], refresh=True)
+                    if show_data:
+                        show = normalize_show(show_data, akas=akas)
+                        store.upsert_show(show)
+
+                episodes = get_show_episodes(show["id"], refresh=refresh)
             except TVMazeError:
                 sync_errors.append(show["name"])
                 continue
 
-            state = build_show_state(show, episodes, store.get_watched_ids(show["id"]))
+            state = build_show_state(
+                show,
+                episodes,
+                store.get_watched_ids(show["id"]),
+                store.get_latest_watched_at(show["id"]),
+            )
             upcoming_episodes.extend(state["upcoming_episodes"])
 
         return render_template(
@@ -293,16 +342,26 @@ def get_tvmaze_client():
 
 
 def cached_json(key, ttl_seconds, producer, refresh=False):
-    if refresh:
-        store.cache_delete(key)
-
     cached = store.cache_get(key)
-    if cached is not None:
+    if cached is not None and not refresh:
         return cached
 
-    payload = producer()
+    try:
+        payload = producer()
+    except TVMazeError:
+        if cached is not None:
+            return cached
+        raise
+
     store.cache_set(key, payload, ttl_seconds)
     return payload
+
+
+def redirect_to_next(default_url):
+    next_url = request.form.get("next")
+    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect(default_url)
 
 
 def get_show(show_id, refresh=False):
@@ -312,6 +371,33 @@ def get_show(show_id, refresh=False):
         lambda: get_tvmaze_client().get_show(show_id),
         refresh=refresh,
     )
+
+
+def get_show_akas(show_id, refresh=False):
+    return cached_json(
+        f"akas:{show_id}",
+        current_app.config["TVMAZE_CACHE_AKAS_SECONDS"],
+        lambda: get_tvmaze_client().get_akas(show_id),
+        refresh=refresh,
+    )
+
+
+def safe_get_show_akas(show_id):
+    try:
+        return get_show_akas(show_id)
+    except TVMazeError:
+        return []
+
+
+def get_show_with_akas(show_id, refresh=False):
+    show_data = get_show(show_id, refresh=refresh)
+    if not show_data:
+        return None, []
+    try:
+        akas = get_show_akas(show_id, refresh=refresh)
+    except TVMazeError:
+        akas = []
+    return show_data, akas
 
 
 def get_show_episodes(show_id, refresh=False):

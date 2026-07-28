@@ -158,6 +158,14 @@ def get_watched_ids(show_id):
     return {row["episode_id"] for row in rows}
 
 
+def get_latest_watched_at(show_id):
+    row = get_db().execute(
+        "SELECT MAX(watched_at) AS latest_watched_at FROM watched_episodes WHERE show_id = ?",
+        (show_id,),
+    ).fetchone()
+    return row["latest_watched_at"] if row else None
+
+
 def mark_episode(episode):
     get_db().execute(
         """
