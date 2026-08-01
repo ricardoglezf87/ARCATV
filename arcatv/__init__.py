@@ -1,5 +1,7 @@
 import hashlib
 import os
+import re
+import unicodedata
 from datetime import date
 from pathlib import Path
 
@@ -70,7 +72,7 @@ def local_config_value(name):
             if not clean_line or clean_line.startswith("#") or "=" not in clean_line:
                 continue
             key, value = clean_line.split("=", 1)
-            if key.strip() == name:
+            if key.strip().lstrip("\ufeff") == name:
                 return value.strip().strip('"').strip("'")
     return None
 
@@ -212,7 +214,7 @@ def register_routes(app):
         if query:
             if is_tmdb_enabled():
                 results = search_tmdb_results(query, saved_ids)
-
+                print(f"TMDb search results for '{query}': {len(results)} found.")
             if not results:
                 results, error = search_tvmaze_results(query, saved_ids)
 
@@ -472,12 +474,6 @@ def register_routes(app):
             )
 
         raw_candidates = get_tmdb_profile_candidates(show_states)
-        if not raw_candidates or len(raw_candidates) < current_app.config["RECOMMENDATION_LIMIT"]:
-            try:
-                raw_candidates.extend(get_recommendation_catalog())
-            except TVMazeError as exc:
-                sync_errors.append(str(exc))
-
         recommendations, genres = rank_recommendations(
             show_states,
             raw_candidates,
@@ -488,6 +484,23 @@ def register_routes(app):
             sort_mode=sort_mode,
             limit=current_app.config["RECOMMENDATION_LIMIT"],
         )
+
+        if not recommendations:
+            try:
+                raw_candidates = get_recommendation_catalog()
+            except TVMazeError as exc:
+                raw_candidates = []
+                sync_errors.append(str(exc))
+            recommendations, genres = rank_recommendations(
+                show_states,
+                raw_candidates,
+                store.get_show_ids(),
+                selected_genre=selected_genre or None,
+                year_from=year_from,
+                year_to=year_to,
+                sort_mode=sort_mode,
+                limit=current_app.config["RECOMMENDATION_LIMIT"],
+            )
 
         enriched_recommendations = add_recommendation_reasons([
             enhance_show_summary(recommendation)
@@ -619,6 +632,25 @@ def show_signature(show):
     )
 
 
+def fold_search_text(value):
+    normalized = unicodedata.normalize("NFKD", value or "")
+    without_marks = "".join(
+        character for character in normalized
+        if not unicodedata.combining(character)
+    )
+    without_symbols = re.sub(r"[^\w\s]", " ", without_marks, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", without_symbols).strip()
+
+
+def tmdb_search_queries(query):
+    variants = [query.strip(), fold_search_text(query)]
+    unique = []
+    for variant in variants:
+        if variant and variant.casefold() not in {item.casefold() for item in unique}:
+            unique.append(variant)
+    return unique
+
+
 def search_tvmaze_results(query, saved_ids, existing_results=None):
     existing_keys = {show_signature(show) for show in (existing_results or [])}
 
@@ -652,24 +684,30 @@ def search_tmdb_results(query, saved_ids, existing_results=None):
 
     existing_keys = {show_signature(show) for show in (existing_results or [])}
 
-    try:
-        raw_results = cached_json(
-            f"tmdb:search:{query.lower()}",
-            current_app.config["TMDB_CACHE_SECONDS"],
-            lambda: get_tmdb_client().search_tv(query),
-        )
-    except TMDbError:
-        return []
-
     results = []
-    for raw_show in raw_results[:12]:
-        if not raw_show.get("id"):
+    seen_tmdb_ids = set()
+    for search_query in tmdb_search_queries(query):
+        try:
+            raw_results = cached_json(
+                f"tmdb:search:v2:{search_query.casefold()}",
+                current_app.config["TMDB_CACHE_SECONDS"],
+                lambda search_query=search_query: get_tmdb_client().search_tv(search_query),
+            )
+        except TMDbError:
             continue
-        show = normalize_tmdb_show(raw_show)
-        if show_signature(show) in existing_keys:
-            continue
-        show["is_saved"] = show["id"] in saved_ids
-        results.append(show)
+
+        for raw_show in raw_results:
+            tmdb_id = raw_show.get("id")
+            if not tmdb_id or tmdb_id in seen_tmdb_ids:
+                continue
+            seen_tmdb_ids.add(tmdb_id)
+            show = normalize_tmdb_show(raw_show)
+            if show_signature(show) in existing_keys:
+                continue
+            show["is_saved"] = show["id"] in saved_ids
+            results.append(show)
+            if len(results) >= 12:
+                return results
     return results
 
 
@@ -677,49 +715,85 @@ def build_recommendation_sections(recommendations, show_states):
     if not recommendations:
         return []
 
-    sections = [
-        {
-            "title": "Para ti ahora",
-            "subtitle": "Mezcla de géneros, puntuación y lo que ya has marcado como visto.",
-            "items": recommendations[:12],
-        },
-        {
-            "title": "Tops del momento para tus gustos",
-            "subtitle": "Series recientes y bien valoradas que encajan con tu perfil.",
-            "items": sorted(
-                recommendations,
-                key=lambda show: (
-                    -(show.get("premiered_year") or 0),
-                    -(show.get("rating") or 0),
-                ),
-            )[:12],
-        },
-    ]
+    sections = []
+    used_ids = set()
+
+    def take_unique(pool, limit=12):
+        items = []
+        for show in pool:
+            show_id = show.get("id")
+            if show_id in used_ids:
+                continue
+            used_ids.add(show_id)
+            items.append(show)
+            if len(items) >= limit:
+                break
+        return items
 
     source_shows = [
         show for show in show_states
         if show.get("watched_count") or show.get("completed")
     ][:4]
     for source in source_shows:
-        source_genres = set(source.get("genres") or [])
-        items = [
+        source_items = [
             recommendation for recommendation in recommendations
-            if source_genres.intersection(recommendation.get("genres") or [])
-        ][:12]
+            if recommendation.get("reason_source_id") == source["id"]
+        ]
+        items = take_unique(source_items)
         if items:
             sections.append(
                 {
                     "title": f"Porque viste {source['name']}",
-                    "subtitle": "Coincidencias directas con esa serie.",
+                    "subtitle": "Recomendaciones con relacion directa o generos realmente compartidos.",
                     "items": items,
                 }
             )
 
+    direct_items = take_unique(
+        [recommendation for recommendation in recommendations if recommendation.get("profile_sources")]
+    )
+    if direct_items:
+        sections.append(
+            {
+                "title": "Similares de TMDb",
+                "subtitle": "Sugerencias directas del nuevo catalogo para tus series vistas.",
+                "items": direct_items,
+            }
+        )
+
+    top_items = take_unique(recommendations)
+    if top_items:
+        sections.append(
+            {
+                "title": "Para ti ahora",
+                "subtitle": "Mezcla de afinidad, puntuacion y lo que ya has marcado como visto.",
+                "items": top_items,
+            }
+        )
+
+    trending_items = take_unique(
+        sorted(
+            recommendations,
+            key=lambda show: (
+                -(show.get("premiered_year") or 0),
+                -(show.get("rating") or 0),
+            ),
+        )
+    )
+    if trending_items:
+        sections.append(
+            {
+                "title": "Tops del momento para tus gustos",
+                "subtitle": "Series recientes y bien valoradas que encajan con tu perfil.",
+                "items": trending_items,
+            }
+        )
+
     for genre in top_profile_genres(show_states):
-        items = [
+        items = take_unique([
             recommendation for recommendation in recommendations
             if genre in (recommendation.get("genres") or [])
-        ][:12]
+        ])
         if items:
             sections.append(
                 {
@@ -730,10 +804,10 @@ def build_recommendation_sections(recommendations, show_states):
             )
 
     for platform in top_profile_platforms(show_states):
-        items = [
+        items = take_unique([
             recommendation for recommendation in recommendations
             if recommendation.get("network") == platform
-        ][:12]
+        ])
         if items:
             sections.append(
                 {
@@ -917,17 +991,31 @@ def get_tmdb_profile_candidates(show_states):
         return []
 
     candidates = []
-    seen_ids = set()
+    candidates_by_id = {}
 
-    def add_many(raw_items, source_label=None):
+    def add_many(raw_items, source_label=None, source=None, relation=None):
         for raw_item in raw_items:
-            if not raw_item.get("id") or raw_item["id"] in seen_ids:
+            if not raw_item.get("id"):
                 continue
-            seen_ids.add(raw_item["id"])
             show = normalize_tmdb_show(raw_item)
+            existing = candidates_by_id.get(show["id"])
+            if existing:
+                show = existing
+            else:
+                candidates_by_id[show["id"]] = show
+                candidates.append(show)
+
             if source_label:
                 show["source_label"] = source_label
-            candidates.append(show)
+            if source:
+                profile_source = {
+                    "id": source["id"],
+                    "name": source["name"],
+                    "relation": relation or "recommendation",
+                }
+                sources = show.setdefault("profile_sources", [])
+                if profile_source["id"] not in {item["id"] for item in sources}:
+                    sources.append(profile_source)
 
     try:
         trending = cached_json(
@@ -964,8 +1052,18 @@ def get_tmdb_profile_candidates(show_states):
         except TMDbError:
             continue
 
-        add_many(recommended, source_label=f"TMDb por {source['name']}")
-        add_many(similar, source_label=f"TMDb similares a {source['name']}")
+        add_many(
+            recommended,
+            source_label=f"TMDb por {source['name']}",
+            source=source,
+            relation="recommendation",
+        )
+        add_many(
+            similar,
+            source_label=f"TMDb similares a {source['name']}",
+            source=source,
+            relation="similar",
+        )
 
     return candidates
 

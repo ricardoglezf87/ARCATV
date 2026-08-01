@@ -1,6 +1,7 @@
 import pytest
 
-from arcatv import create_app
+from arcatv import build_recommendation_sections, create_app
+from arcatv.recommendations import add_recommendation_reasons, rank_recommendations
 from arcatv.tmdb import synthetic_tmdb_show_id
 from arcatv.utils import build_show_state, episode_code, normalize_show
 
@@ -229,6 +230,26 @@ class EmptyTMDbClient(FakeTMDbClient):
         return []
 
 
+class AccentSensitiveTMDbClient(FakeTMDbClient):
+    def search_tv(self, query):
+        assert query
+        if query.casefold() == "los briceno":
+            return [
+                {
+                    **TMDB_SHOW,
+                    "id": 96532,
+                    "name": "Los Briceño",
+                    "original_name": "Los Briceño",
+                    "first_air_date": "2019-11-27",
+                    "genres": [{"name": "Comedy"}],
+                    "genre_ids": [35],
+                    "overview": "El camino al amor.",
+                    "vote_average": 7.9,
+                }
+            ]
+        return []
+
+
 class ExplodingTranslationClient:
     def translate_to_spanish(self, text):
         raise AssertionError(f"No se esperaba traducir: {text}")
@@ -361,7 +382,6 @@ def test_recommendations_are_sorted_by_rating_and_filterable(client):
     assert 'action="/series/2/add"' in html
     assert "Añadir" in html
     assert "Porque viste Serie Demo" in html
-    assert "Tops del momento" in html
     assert "Drama Antiguo" not in html
 
     filtered_html = client.get("/recomendaciones?genero=Comedia").get_data(as_text=True)
@@ -458,6 +478,24 @@ def test_tvmaze_is_search_fallback_when_tmdb_has_no_results(tmp_path):
     assert "TVmaze" in html
 
 
+def test_tmdb_search_tries_accent_folded_query(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-accent-search-test.sqlite"),
+            "TVMAZE_CLIENT": EmptyTVMazeClient(),
+            "TMDB_CLIENT": AccentSensitiveTMDbClient(),
+            "TRANSLATE_TO_SPANISH": False,
+        }
+    )
+    client = app.test_client()
+
+    html = client.get("/buscar?q=los briceño").get_data(as_text=True)
+
+    assert "Los Briceño" in html
+    assert "TMDb" in html
+
+
 def test_tmdb_search_results_skip_external_translation(tmp_path):
     app = create_app(
         {
@@ -508,6 +546,85 @@ def test_tmdb_recommendations_are_personalized_by_watched_profile(tmp_path):
     assert "Porque viste Serie Demo" in html
     assert "TMDb por Serie Demo" in html
     assert "8.6" in html
+
+
+def test_recommendations_filter_generic_matches_and_sections_do_not_repeat():
+    source_a = {
+        "id": 10,
+        "name": "Attack Demo",
+        "genres": ["Anime", "Acción", "Aventura"],
+        "watched_count": 1,
+        "completed": False,
+        "progress": 50,
+    }
+    source_b = {
+        "id": 11,
+        "name": "Arcane Demo",
+        "genres": ["Animación", "Fantasía", "Aventura"],
+        "watched_count": 1,
+        "completed": False,
+        "progress": 50,
+    }
+    good_candidate = {
+        "_normalized": True,
+        "id": 101,
+        "name": "Anime Similar",
+        "original_name": "Anime Similar",
+        "premiered": "2026-01-01",
+        "genres": ["Anime", "Acción"],
+        "rating": 8.1,
+        "source": "tmdb",
+        "source_label": "TMDb por Attack Demo",
+        "profile_sources": [{"id": 10, "name": "Attack Demo", "relation": "recommendation"}],
+    }
+    generic_candidate = {
+        "_normalized": True,
+        "id": 102,
+        "name": "Road Action",
+        "original_name": "Road Action",
+        "premiered": "2026-01-01",
+        "genres": ["Acción", "Aventura", "Comedia"],
+        "rating": 7.8,
+        "source": "tmdb",
+        "source_label": "TMDb tendencias",
+    }
+    fantasy_candidate = {
+        "_normalized": True,
+        "id": 103,
+        "name": "Fantasy Similar",
+        "original_name": "Fantasy Similar",
+        "premiered": "2026-01-01",
+        "genres": ["Animación", "Fantasía"],
+        "rating": 7.9,
+        "source": "tmdb",
+        "source_label": "TMDb por Arcane Demo",
+        "profile_sources": [{"id": 11, "name": "Arcane Demo", "relation": "similar"}],
+    }
+
+    recommendations, _genres = rank_recommendations(
+        [source_a, source_b],
+        [good_candidate, generic_candidate, fantasy_candidate],
+        saved_ids=set(),
+    )
+    recommendations = add_recommendation_reasons(recommendations, [source_a, source_b])
+    sections = build_recommendation_sections(recommendations, [source_a, source_b])
+
+    names = [recommendation["name"] for recommendation in recommendations]
+    assert "Anime Similar" in names
+    assert "Fantasy Similar" in names
+    assert "Road Action" not in names
+
+    section_ids = [
+        show["id"]
+        for section in sections
+        for show in section["items"]
+    ]
+    assert len(section_ids) == len(set(section_ids))
+    for section in sections:
+        if section["title"] == "Porque viste Attack Demo":
+            assert {show["reason_source_id"] for show in section["items"]} == {10}
+        if section["title"] == "Porque viste Arcane Demo":
+            assert {show["reason_source_id"] for show in section["items"]} == {11}
 
 
 def test_only_completed_shows_are_hidden_on_dashboard_by_default(client):

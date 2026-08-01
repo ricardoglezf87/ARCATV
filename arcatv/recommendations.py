@@ -4,6 +4,9 @@ from datetime import date
 from .utils import normalize_show
 
 
+GENERIC_MATCH_GENRES = {"Acción", "Aventura", "Comedia", "Drama", "Romance"}
+
+
 def rating_value(show):
     rating = show.get("rating") or {}
     if isinstance(rating, dict):
@@ -36,6 +39,18 @@ def source_priority(show):
     return 0 if show.get("source") == "tmdb" else 1
 
 
+def meaningful_genres(genres):
+    return set(genres or []).difference(GENERIC_MATCH_GENRES)
+
+
+def profile_source_ids(show):
+    return {
+        source.get("id")
+        for source in show.get("profile_sources") or []
+        if source.get("id") is not None
+    }
+
+
 def recommendation_profile(show_states):
     weights = Counter()
 
@@ -65,6 +80,7 @@ def rank_recommendations(
     if not profile:
         return [], []
 
+    meaningful_profile = meaningful_genres(profile)
     if year_from is None:
         year_from = date.today().year - 8
 
@@ -98,7 +114,11 @@ def rank_recommendations(
 
         genres = set(show.get("genres") or [])
         overlap = genres.intersection(profile)
-        if not overlap:
+        source_match = bool(profile_source_ids(show))
+        meaningful_overlap = overlap.intersection(meaningful_profile)
+        if not overlap and not source_match:
+            continue
+        if meaningful_profile and not meaningful_overlap and not source_match:
             continue
 
         genre_options.update(genres)
@@ -106,14 +126,20 @@ def rank_recommendations(
             continue
 
         rating = rating_value(raw_show)
-        affinity = sum(profile[genre] for genre in overlap)
+        affinity = sum(
+            profile[genre] * (1.35 if genre in meaningful_overlap else 0.6)
+            for genre in overlap
+        )
+        if source_match:
+            affinity += 4
         show.update(
             {
                 "rating": rating,
                 "affinity": round(min(100, affinity * 18 + rating * 4)),
-                "matched_genres": sorted(overlap),
+                "matched_genres": sorted(meaningful_overlap or overlap),
                 "premiered_year": year,
                 "source_priority": source_priority(show),
+                "source_match": source_match,
             }
         )
         recommendations.append(show)
@@ -122,6 +148,7 @@ def rank_recommendations(
         recommendations.sort(
             key=lambda show: (
                 show["source_priority"],
+                -int(show["source_match"]),
                 -(show["rating"] or 0),
                 -(show.get("premiered_year") or 0),
                 -show["affinity"],
@@ -132,6 +159,7 @@ def rank_recommendations(
         recommendations.sort(
             key=lambda show: (
                 show["source_priority"],
+                -int(show["source_match"]),
                 -(show.get("premiered_year") or 0),
                 -(show["rating"] or 0),
                 -show["affinity"],
@@ -147,24 +175,54 @@ def add_recommendation_reasons(recommendations, show_states):
         show for show in show_states
         if show.get("watched_count") or show.get("completed")
     ]
+    source_by_id = {show["id"]: show for show in source_shows}
 
     for recommendation in recommendations:
+        profile_sources = recommendation.get("profile_sources") or []
+        direct_source = next(
+            (
+                source_by_id.get(profile_source.get("id"))
+                for profile_source in profile_sources
+                if source_by_id.get(profile_source.get("id"))
+            ),
+            None,
+        )
+        if direct_source:
+            relation = profile_sources[0].get("relation")
+            detail = "Recomendacion directa de TMDb"
+            if relation == "similar":
+                detail = "Serie similar segun TMDb"
+            recommendation["reason"] = f"Porque viste {direct_source['name']}"
+            recommendation["reason_detail"] = detail
+            recommendation["reason_source_id"] = direct_source["id"]
+            continue
+
         rec_genres = set(recommendation.get("genres") or [])
         best_source = None
         best_overlap = set()
+        best_meaningful_overlap = set()
 
         for source in source_shows:
             overlap = rec_genres.intersection(source.get("genres") or [])
-            if len(overlap) > len(best_overlap):
+            meaningful_overlap = meaningful_genres(overlap)
+            if (
+                len(meaningful_overlap),
+                len(overlap),
+            ) > (
+                len(best_meaningful_overlap),
+                len(best_overlap),
+            ):
                 best_source = source
                 best_overlap = overlap
+                best_meaningful_overlap = meaningful_overlap
 
         if best_source:
             recommendation["reason"] = f"Porque viste {best_source['name']}"
-            recommendation["reason_detail"] = "Coincide en " + ", ".join(sorted(best_overlap))
+            displayed_overlap = best_meaningful_overlap or best_overlap
+            recommendation["reason_detail"] = "Coincide en " + ", ".join(sorted(displayed_overlap))
             recommendation["reason_source_id"] = best_source["id"]
         else:
-            recommendation["reason"] = "Según tus series vistas"
+            recommendation["reason"] = "Segun tus series vistas"
             recommendation["reason_detail"] = ""
 
     return recommendations

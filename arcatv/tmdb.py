@@ -2,6 +2,13 @@ import requests
 
 from .utils import translated_genres, translated_status
 
+try:
+    import truststore
+except ImportError:  # pragma: no cover - dependency is installed from requirements.
+    truststore = None
+else:
+    truststore.inject_into_ssl()
+
 
 TMDB_SHOW_ID_OFFSET = 1_000_000_000
 TMDB_EPISODE_ID_OFFSET = 1_000_000_000_000
@@ -100,10 +107,10 @@ class TMDbClient:
 
         query = dict(params or {})
         headers = {"User-Agent": self.user_agent}
-        if self.bearer_token:
-            headers["Authorization"] = f"Bearer {self.bearer_token}"
-        elif self.api_key:
+        if self.api_key:
             query["api_key"] = self.api_key
+        elif self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
 
         try:
             response = self.session.get(
@@ -111,7 +118,9 @@ class TMDbClient:
                 params=query,
                 headers=headers,
                 timeout=self.timeout,
+                verify=False,
             )
+            print(f"TMDb API request: {response.url} - Status code: {response.status_code}")
             if response.status_code == 404:
                 return {}
             response.raise_for_status()
