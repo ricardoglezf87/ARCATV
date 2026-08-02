@@ -214,7 +214,6 @@ def register_routes(app):
         if query:
             if is_tmdb_enabled():
                 results = search_tmdb_results(query, saved_ids)
-                print(f"TMDb search results for '{query}': {len(results)} found.")
             if not results:
                 results, error = search_tvmaze_results(query, saved_ids)
 

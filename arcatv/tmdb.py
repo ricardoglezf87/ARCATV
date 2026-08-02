@@ -120,7 +120,6 @@ class TMDbClient:
                 timeout=self.timeout,
                 verify=False,
             )
-            print(f"TMDb API request: {response.url} - Status code: {response.status_code}")
             if response.status_code == 404:
                 return {}
             response.raise_for_status()
