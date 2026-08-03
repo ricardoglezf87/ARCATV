@@ -77,6 +77,13 @@ def local_config_value(name):
     return None
 
 
+def local_config_bool(name, default=True):
+    value = local_config_value(name)
+    if value is None:
+        return default
+    return value.strip().casefold() not in {"0", "false", "no", "off"}
+
+
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
@@ -95,6 +102,7 @@ def create_app(test_config=None):
         TMDB_BEARER_TOKEN=local_config_value("TMDB_BEARER_TOKEN"),
         TMDB_BASE_URL="https://api.themoviedb.org/3",
         TMDB_CACHE_SECONDS=24 * 60 * 60,
+        TMDB_VERIFY_SSL=local_config_bool("TMDB_VERIFY_SSL", True),
         TRANSLATE_TMDB_SUMMARIES=False,
         TRANSLATE_TO_SPANISH=True,
         TRANSLATION_CACHE_SECONDS=30 * 24 * 60 * 60,
@@ -543,6 +551,7 @@ def get_tmdb_client():
             api_key=current_app.config.get("TMDB_API_KEY"),
             bearer_token=current_app.config.get("TMDB_BEARER_TOKEN"),
             base_url=current_app.config["TMDB_BASE_URL"],
+            verify_ssl=current_app.config["TMDB_VERIFY_SSL"],
         )
     return g.tmdb_client
 
@@ -643,11 +652,30 @@ def fold_search_text(value):
 
 def tmdb_search_queries(query):
     variants = [query.strip(), fold_search_text(query)]
+    folded_query = variants[-1]
+    for word in re.findall(r"\S+", query):
+        if "ñ" not in word.casefold():
+            continue
+        folded_word = fold_search_text(word)
+        if len(folded_word) > 3 and folded_word[-1:] in "aeiou":
+            truncated = folded_word[:-1]
+            variants.append(folded_query.replace(folded_word, truncated))
+            variants.append(truncated)
     unique = []
     for variant in variants:
         if variant and variant.casefold() not in {item.casefold() for item in unique}:
             unique.append(variant)
     return unique
+
+
+def tmdb_direct_id_from_query(query):
+    match = re.search(r"themoviedb\.org/tv/(\d+)", query, flags=re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    clean_query = query.strip()
+    if clean_query.isdigit():
+        return int(clean_query)
+    return None
 
 
 def search_tvmaze_results(query, saved_ids, existing_results=None):
@@ -685,6 +713,21 @@ def search_tmdb_results(query, saved_ids, existing_results=None):
 
     results = []
     seen_tmdb_ids = set()
+    direct_id = tmdb_direct_id_from_query(query)
+    if direct_id:
+        try:
+            raw_show = cached_json(
+                f"tmdb:show:{direct_id}",
+                current_app.config["TMDB_CACHE_SECONDS"],
+                lambda: get_tmdb_client().get_tv(direct_id),
+            )
+        except TMDbError:
+            raw_show = None
+        if raw_show:
+            show = normalize_tmdb_show(raw_show)
+            show["is_saved"] = show["id"] in saved_ids
+            return [show]
+
     for search_query in tmdb_search_queries(query):
         try:
             raw_results = cached_json(

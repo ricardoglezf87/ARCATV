@@ -38,6 +38,8 @@ Otra opción cómoda es crear un archivo `.env` en la raíz con una de estas lí
 TMDB_API_KEY=tu_clave_tmdb
 ```
 
+Si Windows o tu red bloquean la validación del certificado de TMDb, la app intenta usar el almacén de certificados del sistema con `truststore`. Como último recurso local puedes añadir `TMDB_VERIFY_SSL=false` al `.env`; funciona como el `verify=False` de `requests`, pero es menos seguro y conviene usarlo solo temporalmente.
+
 ## Funciones incluidas
 
 - Buscar series primero en TMDb y usar TVmaze como respaldo.

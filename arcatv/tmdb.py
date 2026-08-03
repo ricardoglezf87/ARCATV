@@ -62,12 +62,14 @@ class TMDbClient:
         base_url="https://api.themoviedb.org/3",
         session=None,
         timeout=10,
+        verify_ssl=True,
     ):
         self.api_key = api_key
         self.bearer_token = bearer_token
         self.base_url = base_url.rstrip("/")
         self.session = session or requests.Session()
         self.timeout = timeout
+        self.verify_ssl = verify_ssl
         self.user_agent = "ARCATV/0.1 (+local-tv-tracker)"
 
     @property
@@ -118,12 +120,18 @@ class TMDbClient:
                 params=query,
                 headers=headers,
                 timeout=self.timeout,
-                verify=False,
+                verify=self.verify_ssl,
             )
             if response.status_code == 404:
                 return {}
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.SSLError as exc:
+            raise TMDbError(
+                "No se pudo validar el certificado SSL de TMDb. "
+                "Revisa los certificados de Windows o usa TMDB_VERIFY_SSL=false "
+                "en .env solo como solucion local temporal."
+            ) from exc
         except (requests.RequestException, ValueError) as exc:
             raise TMDbError("TMDb no respondió correctamente.") from exc
 

@@ -2,7 +2,7 @@ import pytest
 
 from arcatv import build_recommendation_sections, create_app
 from arcatv.recommendations import add_recommendation_reasons, rank_recommendations
-from arcatv.tmdb import synthetic_tmdb_show_id
+from arcatv.tmdb import TMDbClient, synthetic_tmdb_show_id
 from arcatv.utils import build_show_state, episode_code, normalize_show
 
 
@@ -233,7 +233,7 @@ class EmptyTMDbClient(FakeTMDbClient):
 class AccentSensitiveTMDbClient(FakeTMDbClient):
     def search_tv(self, query):
         assert query
-        if query.casefold() == "los briceno":
+        if query.casefold() == "los bricen":
             return [
                 {
                     **TMDB_SHOW,
@@ -253,6 +253,25 @@ class AccentSensitiveTMDbClient(FakeTMDbClient):
 class ExplodingTranslationClient:
     def translate_to_spanish(self, text):
         raise AssertionError(f"No se esperaba traducir: {text}")
+
+
+class CapturingSession:
+    def __init__(self):
+        self.verify = None
+
+    def get(self, _url, **kwargs):
+        self.verify = kwargs.get("verify")
+        return FakeResponse()
+
+
+class FakeResponse:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"results": []}
 
 
 @pytest.fixture()
@@ -496,6 +515,24 @@ def test_tmdb_search_tries_accent_folded_query(tmp_path):
     assert "TMDb" in html
 
 
+def test_tmdb_search_accepts_direct_tmdb_url(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "arcatv-tmdb-url-search-test.sqlite"),
+            "TVMAZE_CLIENT": EmptyTVMazeClient(),
+            "TMDB_CLIENT": FakeTMDbClient(),
+            "TRANSLATE_TO_SPANISH": False,
+        }
+    )
+    client = app.test_client()
+
+    html = client.get("/buscar?q=https://www.themoviedb.org/tv/42-demo").get_data(as_text=True)
+
+    assert "La Serie Perdida" in html
+    assert "TMDb" in html
+
+
 def test_tmdb_search_results_skip_external_translation(tmp_path):
     app = create_app(
         {
@@ -514,6 +551,15 @@ def test_tmdb_search_results_skip_external_translation(tmp_path):
 
     assert response.status_code == 200
     assert "Una serie que aparece en el repositorio alternativo." in html
+
+
+def test_tmdb_client_uses_configured_ssl_verification():
+    session = CapturingSession()
+    client = TMDbClient(api_key="demo", session=session, verify_ssl=False)
+
+    client.search_tv("demo")
+
+    assert session.verify is False
 
 
 def test_tmdb_recommendations_are_personalized_by_watched_profile(tmp_path):
