@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Mis series · ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Seguimiento personal</p>
+        <h1>Mis series</h1>
+    </div>
+    <div class="header-actions">
+        <form action="{{ url_for('refresh_library') }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="hidden" name="alcance" value="activas">
+            <button class="button button-secondary" type="submit">Actualizar en emisión</button>
+        </form>
+        <form action="{{ url_for('refresh_library') }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <input type="hidden" name="alcance" value="todas">
+            <button class="button button-secondary" type="submit">Actualizar todas</button>
+        </form>
+        <a class="button button-primary" href="{{ url_for('search') }}">Añadir serie</a>
+    </div>
+</section>
+
+<div class="view-toggles" aria-label="Filtro de series">
+    {% if show_finalized %}
+        <a class="button button-secondary" href="{{ url_for('dashboard') }}">Ocultar finalizadas</a>
+    {% else %}
+        <a class="button button-secondary" href="{{ url_for('dashboard', estado='todas') }}">Mostrar finalizadas</a>
+        {% if totals.hidden_finalized %}
+            <span class="muted">{{ totals.hidden_finalized }} completadas ocultas</span>
+        {% endif %}
+    {% endif %}
+</div>
+
+{% if sync_errors %}
+    <p class="inline-warning">No se pudieron actualizar ahora: {{ sync_errors | join(", ") }}.</p>
+{% endif %}
+
+<section class="metrics-grid" aria-label="Resumen">
+    <div class="metric">
+        <span>Series</span>
+        <strong>{{ totals.shows }}</strong>
+    </div>
+    <div class="metric">
+        <span>Vistos</span>
+        <strong>{{ totals.watched }}</strong>
+    </div>
+    <div class="metric">
+        <span>Emitidos</span>
+        <strong>{{ totals.aired }}</strong>
+    </div>
+    <div class="metric">
+        <span>Próximos</span>
+        <strong>{{ totals.upcoming }}</strong>
+    </div>
+</section>
+
+{% if not shows %}
+    <section class="empty-state">
+        {% if totals.all_shows %}
+            <h2>No hay series activas visibles</h2>
+            <p>Las series que ya tienes completamente vistas están ocultas para que el inicio cargue más ligero.</p>
+        {% else %}
+            <h2>Empieza buscando una serie</h2>
+            <p>Guarda tus favoritas y ARCATV irá mostrando progreso, episodios pendientes y nuevas emisiones.</p>
+        {% endif %}
+        <form class="wide-search" action="{{ url_for('search') }}" method="get">
+            <label class="sr-only" for="empty-search">Nombre de la serie</label>
+            <input id="empty-search" name="q" type="search" placeholder="The Last of Us, Severance, Doctor Who...">
+            <button class="button button-primary" type="submit">Buscar</button>
+        </form>
+    </section>
+{% else %}
+    <section class="content-layout">
+        <div class="show-grid">
+            {% for show in shows %}
+                <article class="show-card">
+                    <a class="poster-link" href="{{ url_for('show_detail', show_id=show.id) }}" aria-label="Abrir {{ show.name }}">
+                        {% if show.image_url %}
+                            <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}" loading="lazy">
+                        {% else %}
+                            <span class="poster-fallback">{{ show.name[:1] }}</span>
+                        {% endif %}
+                    </a>
+                    <div class="show-card-body">
+                        <div class="show-card-title">
+                            <h2><a href="{{ url_for('show_detail', show_id=show.id) }}">{{ show.name }}</a></h2>
+                            <span class="status-pill">{{ show.status }}</span>
+                        </div>
+                        <p class="muted">{{ show.watched_count }} de {{ show.aired_count }} emitidos vistos</p>
+                        <div class="progress" aria-label="{{ show.progress }}% visto">
+                            <span style="width: {{ show.progress }}%"></span>
+                        </div>
+                        {% if show.next_unwatched %}
+                            <p class="next-line">
+                                Pendiente: <strong>{{ show.next_unwatched|episode_code }}</strong>
+                                {{ show.next_unwatched.name }}
+                            </p>
+                        {% elif show.aired_count %}
+                            <p class="next-line">Todo lo emitido está visto.</p>
+                        {% else %}
+                            <p class="next-line">Sin episodios emitidos todavía.</p>
+                        {% endif %}
+                        {% if show.next_upcoming %}
+                            <p class="air-line">
+                                Próximo: {{ show.next_upcoming|episode_code }}
+                                · {{ show.next_upcoming|format_air_datetime }}
+                            </p>
+                        {% endif %}
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+
+        <aside class="side-panel" aria-label="Próximos capítulos">
+            <div class="section-heading">
+                <h2>Próximos</h2>
+                <a href="{{ url_for('upcoming') }}">Ver todos</a>
+            </div>
+            {% if upcoming %}
+                <div class="upcoming-list compact">
+                    {% for episode in upcoming %}
+                        <article class="episode-mini">
+                            <span class="date-chip">{{ episode|format_air_datetime }}</span>
+                            <h3>{{ episode.show_name }}</h3>
+                            <p>{{ episode|episode_code }} · {{ episode.name }}</p>
+                        </article>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="muted">No hay próximos capítulos conocidos para tus series.</p>
+            {% endif %}
+        </aside>
+    </section>
+{% endif %}
+{% endblock %}
