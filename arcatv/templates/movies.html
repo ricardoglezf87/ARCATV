@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Mis peliculas - ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Seguimiento personal</p>
+        <h1>Mis peliculas</h1>
+    </div>
+    <div class="header-actions">
+        <a class="button button-secondary" href="{{ url_for('movie_recommendations') }}">Recomendaciones</a>
+        <a class="button button-primary" href="{{ url_for('movie_search') }}">Anadir pelicula</a>
+    </div>
+</section>
+
+<div class="view-toggles" aria-label="Filtro de peliculas">
+    {% if status_filter == "todas" %}
+        <a class="button button-secondary" href="{{ url_for('movies_dashboard') }}">Mostrar solo pendientes</a>
+    {% else %}
+        <a class="button button-secondary" href="{{ url_for('movies_dashboard', estado='todas') }}">Ver todas</a>
+        {% if totals.watched %}
+            <span class="muted">{{ totals.watched }} vistas ocultas</span>
+        {% endif %}
+    {% endif %}
+</div>
+
+<section class="metrics-grid" aria-label="Resumen de peliculas">
+    <div class="metric">
+        <span>Peliculas</span>
+        <strong>{{ totals.movies }}</strong>
+    </div>
+    <div class="metric">
+        <span>Vistas</span>
+        <strong>{{ totals.watched }}</strong>
+    </div>
+    <div class="metric">
+        <span>Pendientes</span>
+        <strong>{{ totals.pending }}</strong>
+    </div>
+</section>
+
+{% if not movies %}
+    <section class="empty-state">
+        {% if totals.movies %}
+            <h2>No tienes peliculas pendientes</h2>
+            <p>Las peliculas vistas estan ocultas para que esta vista funcione como una lista de pendientes.</p>
+        {% else %}
+            <h2>Empieza buscando una pelicula</h2>
+            <p>Guarda peliculas pendientes o marcalas como vistas para alimentar tus recomendaciones.</p>
+        {% endif %}
+        <form class="wide-search" action="{{ url_for('movie_search') }}" method="get">
+            <label class="sr-only" for="empty-movie-search">Nombre de la pelicula</label>
+            <input id="empty-movie-search" name="q" type="search" placeholder="Dune, Alien, Inception...">
+            <button class="button button-primary" type="submit">Buscar</button>
+        </form>
+    </section>
+{% else %}
+    <section class="show-grid" aria-label="Tus peliculas">
+        {% for movie in movies %}
+            <article class="show-card">
+                <a class="poster-link" href="{{ url_for('movie_detail', movie_id=movie.id) }}" aria-label="Abrir {{ movie.name }}">
+                    {% if movie.image_url %}
+                        <img src="{{ movie.image_url }}" alt="Poster de {{ movie.name }}" loading="lazy">
+                    {% else %}
+                        <span class="poster-fallback">{{ movie.name[:1] }}</span>
+                    {% endif %}
+                </a>
+                <div class="show-card-body">
+                    <div class="show-card-title">
+                        <h2><a href="{{ url_for('movie_detail', movie_id=movie.id) }}">{{ movie.name }}</a></h2>
+                        <span class="status-pill">{{ "Vista" if movie.watched else "Pendiente" }}</span>
+                    </div>
+                    <p class="muted">
+                        {% if movie.premiered %}{{ movie.premiered[:4] }}{% else %}Sin fecha{% endif %}
+                        {% if movie.network %} - {{ movie.network }}{% endif %}
+                    </p>
+                    {% if movie.genres %}
+                        <p class="tags">{{ movie.genres | join(" - ") }}</p>
+                    {% endif %}
+                    <div class="recommendation-actions">
+                        <a class="button button-secondary" href="{{ url_for('movie_detail', movie_id=movie.id) }}">Abrir</a>
+                        <form action="{{ url_for('set_movie_watched', movie_id=movie.id) }}" method="post">
+                            <input type="hidden" name="next" value="{{ request.full_path }}">
+                            {% if movie.watched %}
+                                <input type="hidden" name="watched" value="0">
+                                <button class="button button-secondary" type="submit">Quitar visto</button>
+                            {% else %}
+                                <input type="hidden" name="watched" value="1">
+                                <button class="button button-primary" type="submit">Marcar vista</button>
+                            {% endif %}
+                        </form>
+                    </div>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}

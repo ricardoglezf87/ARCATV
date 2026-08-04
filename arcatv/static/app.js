@@ -60,3 +60,38 @@ episodeDialog?.addEventListener("click", (event) => {
         episodeDialog.close();
     }
 });
+
+const sourceSelectAll = document.querySelector("#source-select-all");
+const sourceCheckboxes = [...document.querySelectorAll('.source-picker input[name="origen"]')];
+const sourceSelectionCount = document.querySelector("#source-selection-count");
+const sourceSummaryCount = document.querySelector("#source-summary-count");
+
+function updateSourceSelection() {
+    if (!sourceSelectAll || !sourceCheckboxes.length) {
+        return;
+    }
+
+    const selectedCount = sourceCheckboxes.filter((checkbox) => checkbox.checked).length;
+    sourceSelectAll.checked = selectedCount === sourceCheckboxes.length;
+    sourceSelectAll.indeterminate = selectedCount > 0 && selectedCount < sourceCheckboxes.length;
+
+    if (sourceSelectionCount) {
+        sourceSelectionCount.textContent = `${selectedCount} de ${sourceCheckboxes.length}`;
+    }
+    if (sourceSummaryCount) {
+        sourceSummaryCount.textContent = `${selectedCount} seleccionadas`;
+    }
+}
+
+sourceSelectAll?.addEventListener("change", () => {
+    sourceCheckboxes.forEach((checkbox) => {
+        checkbox.checked = sourceSelectAll.checked;
+    });
+    updateSourceSelection();
+});
+
+sourceCheckboxes.forEach((checkbox) => {
+    checkbox.addEventListener("change", updateSourceSelection);
+});
+
+updateSourceSelection();

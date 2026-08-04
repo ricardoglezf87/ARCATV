@@ -11,9 +11,11 @@ else:
 
 
 TMDB_SHOW_ID_OFFSET = 1_000_000_000
+TMDB_MOVIE_ID_OFFSET = 2_000_000_000
 TMDB_EPISODE_ID_OFFSET = 1_000_000_000_000
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w342"
 TMDB_STILL_BASE_URL = "https://image.tmdb.org/t/p/w500"
+TMDB_PROFILE_BASE_URL = "https://image.tmdb.org/t/p/w185"
 TMDB_TV_GENRES = {
     10759: "Action & Adventure",
     16: "Animation",
@@ -32,6 +34,27 @@ TMDB_TV_GENRES = {
     10768: "War & Politics",
     37: "Western",
 }
+TMDB_MOVIE_GENRES = {
+    28: "Action",
+    12: "Adventure",
+    16: "Animation",
+    35: "Comedy",
+    80: "Crime",
+    99: "Documentary",
+    18: "Drama",
+    10751: "Family",
+    14: "Fantasy",
+    36: "History",
+    27: "Horror",
+    10402: "Music",
+    9648: "Mystery",
+    10749: "Romance",
+    878: "Science-Fiction",
+    10770: "TV Movie",
+    53: "Thriller",
+    10752: "War",
+    37: "Western",
+}
 
 
 class TMDbError(RuntimeError):
@@ -42,12 +65,25 @@ def synthetic_tmdb_show_id(tmdb_id):
     return TMDB_SHOW_ID_OFFSET + int(tmdb_id)
 
 
+def synthetic_tmdb_movie_id(tmdb_id):
+    return TMDB_MOVIE_ID_OFFSET + int(tmdb_id)
+
+
 def is_tmdb_show_id(show_id):
-    return int(show_id) >= TMDB_SHOW_ID_OFFSET
+    value = int(show_id)
+    return TMDB_SHOW_ID_OFFSET <= value < TMDB_MOVIE_ID_OFFSET
+
+
+def is_tmdb_movie_id(movie_id):
+    return int(movie_id) >= TMDB_MOVIE_ID_OFFSET
 
 
 def tmdb_id_from_show_id(show_id):
     return int(show_id) - TMDB_SHOW_ID_OFFSET
+
+
+def tmdb_id_from_movie_id(movie_id):
+    return int(movie_id) - TMDB_MOVIE_ID_OFFSET
 
 
 def synthetic_tmdb_episode_id(tmdb_episode_id):
@@ -82,8 +118,29 @@ class TMDbClient:
             {"query": query, "language": language, "page": page, "include_adult": "false"},
         ).get("results", [])
 
+    def search_movie(self, query, language="es-ES", page=1):
+        return self._get(
+            "/search/movie",
+            {"query": query, "language": language, "page": page, "include_adult": "false"},
+        ).get("results", [])
+
+    def search_people(self, query, language="es-ES", page=1):
+        return self._get(
+            "/search/person",
+            {"query": query, "language": language, "page": page, "include_adult": "false"},
+        ).get("results", [])
+
     def get_tv(self, series_id, language="es-ES"):
         return self._get(f"/tv/{series_id}", {"language": language})
+
+    def get_movie(self, movie_id, language="es-ES"):
+        return self._get(f"/movie/{movie_id}", {"language": language})
+
+    def get_tv_credits(self, series_id, language="es-ES"):
+        return self._get(f"/tv/{series_id}/credits", {"language": language})
+
+    def get_movie_credits(self, movie_id, language="es-ES"):
+        return self._get(f"/movie/{movie_id}/credits", {"language": language})
 
     def get_season(self, series_id, season_number, language="es-ES"):
         return self._get(f"/tv/{series_id}/season/{season_number}", {"language": language})
@@ -100,8 +157,32 @@ class TMDbClient:
             {"language": language, "page": page},
         ).get("results", [])
 
+    def get_movie_recommendations(self, movie_id, language="es-ES", page=1):
+        return self._get(
+            f"/movie/{movie_id}/recommendations",
+            {"language": language, "page": page},
+        ).get("results", [])
+
+    def get_movie_similar(self, movie_id, language="es-ES", page=1):
+        return self._get(
+            f"/movie/{movie_id}/similar",
+            {"language": language, "page": page},
+        ).get("results", [])
+
     def get_trending_tv(self, time_window="week", language="es-ES"):
         return self._get(f"/trending/tv/{time_window}", {"language": language}).get("results", [])
+
+    def get_trending_movies(self, time_window="week", language="es-ES"):
+        return self._get(f"/trending/movie/{time_window}", {"language": language}).get("results", [])
+
+    def get_person(self, person_id, language="es-ES"):
+        return self._get(f"/person/{person_id}", {"language": language})
+
+    def get_person_tv_credits(self, person_id, language="es-ES"):
+        return self._get(f"/person/{person_id}/tv_credits", {"language": language})
+
+    def get_person_movie_credits(self, person_id, language="es-ES"):
+        return self._get(f"/person/{person_id}/movie_credits", {"language": language})
 
     def _get(self, path, params=None):
         if not self.enabled:
@@ -172,6 +253,83 @@ def normalize_tmdb_show(show):
         "source": "tmdb",
         "source_label": "TMDb",
         "_normalized": True,
+    }
+
+
+def normalize_tmdb_movie(movie):
+    poster_path = movie.get("poster_path")
+    companies = movie.get("production_companies") or []
+    first_company = companies[0] if companies else {}
+    genres = movie.get("genres") or []
+    if not genres and movie.get("genre_names"):
+        genres = [{"name": genre} for genre in movie["genre_names"]]
+    if not genres and movie.get("genre_ids"):
+        genres = [
+            {"name": TMDB_MOVIE_GENRES[genre_id]}
+            for genre_id in movie["genre_ids"]
+            if genre_id in TMDB_MOVIE_GENRES
+        ]
+
+    genre_names = [genre["name"] if isinstance(genre, dict) else genre for genre in genres]
+    title = movie.get("title") or movie.get("name") or movie.get("original_title") or "Sin titulo"
+    original_title = movie.get("original_title") or movie.get("original_name") or title
+    release_date = movie.get("release_date") or movie.get("first_air_date")
+
+    return {
+        "id": synthetic_tmdb_movie_id(movie["id"]),
+        "name": title,
+        "original_name": original_title,
+        "premiered": release_date,
+        "status": translated_status(movie.get("status")),
+        "language": (movie.get("original_language") or "").upper() or "Sin idioma",
+        "genres": translated_genres(genre_names, show=movie, network=first_company),
+        "summary": movie.get("overview") or "",
+        "image_url": f"{TMDB_IMAGE_BASE_URL}{poster_path}" if poster_path else None,
+        "official_url": movie.get("homepage") or f"https://www.themoviedb.org/movie/{movie['id']}",
+        "network": first_company.get("name") if first_company else None,
+        "runtime": movie.get("runtime"),
+        "rating": round(movie.get("vote_average") or 0, 1),
+        "tmdb_id": movie["id"],
+        "source": "tmdb",
+        "source_label": "TMDb",
+        "_normalized": True,
+    }
+
+
+def normalize_tmdb_cast_member(member):
+    profile_path = member.get("profile_path")
+    return {
+        "id": member["id"],
+        "name": member.get("name") or "Sin nombre",
+        "character": member.get("character") or "",
+        "image_url": f"{TMDB_PROFILE_BASE_URL}{profile_path}" if profile_path else None,
+        "order": member.get("order") if member.get("order") is not None else 999,
+        "popularity": member.get("popularity") or 0,
+    }
+
+
+def normalize_tmdb_person(person):
+    profile_path = person.get("profile_path")
+    known_for = []
+    for item in person.get("known_for") or []:
+        if item.get("media_type") not in {None, "tv", "movie"}:
+            continue
+        title = item.get("name") or item.get("title")
+        if title:
+            known_for.append(title)
+
+    return {
+        "id": person["id"],
+        "name": person.get("name") or "Sin nombre",
+        "biography": person.get("biography") or "",
+        "birthday": person.get("birthday"),
+        "deathday": person.get("deathday"),
+        "place_of_birth": person.get("place_of_birth"),
+        "known_for_department": person.get("known_for_department"),
+        "known_for": known_for[:4],
+        "image_url": f"{TMDB_PROFILE_BASE_URL}{profile_path}" if profile_path else None,
+        "official_url": f"https://www.themoviedb.org/person/{person['id']}",
+        "popularity": person.get("popularity") or 0,
     }
 
 

@@ -1,14 +1,10 @@
 # ARCATV
 
-Aplicación web en Python para llevar el seguimiento de series de TV: guarda tus series favoritas, marca episodios vistos y consulta los próximos capítulos conocidos.
+Aplicación web en Python para llevar el seguimiento de series de TV, películas y mangas: guarda tus series favoritas, marca episodios o películas vistas, registra el capítulo de manga por el que vas y consulta próximos capítulos, reparto, autores y recomendaciones.
 
 ## Fuente de datos
 
-ARCATV usa [TMDb](https://developer.themoviedb.org/reference/getting-started) como fuente principal cuando `TMDB_API_KEY` o `TMDB_BEARER_TOKEN` están configurados. TMDb devuelve fichas, búsquedas, temporadas, episodios, tendencias y recomendaciones con localización `es-ES`, así que esos textos no pasan por traducción externa.
-
-[TVmaze](https://www.tvmaze.com/api) queda como repositorio de respaldo: funciona sin clave y se usa cuando TMDb no está configurado o no aporta candidatos suficientes. Los datos se guardan en caché local durante unas horas para que la experiencia sea rápida y respetuosa con los servicios.
-
-Cuando TVmaze tiene un alias para España o países hispanohablantes, ARCATV usa ese nombre en la interfaz. Si no existe alias en español, mantiene el título original. Las descripciones que vengan de TVmaze se intentan traducir al español con MyMemory y se cachean localmente; si la traducción no está disponible, se muestra el texto original.
+ARCATV usa [TMDb](https://developer.themoviedb.org/reference/getting-started) para series y películas, ComicK como fuente principal de búsquedas, fichas, portadas y capítulos de manga, [MangaDex](https://api.mangadex.org/docs/) como respaldo de mangas ya guardados, y AniList como apoyo para recomendaciones de manga. Las búsquedas, fichas, temporadas, episodios, películas, reparto y recomendaciones audiovisuales se solicitan a TMDb con localización `es-ES`, sin servicios de traducción externos. Los capítulos de manga se solicitan priorizando español e inglés. Los resultados se guardan unas horas en caché local para que la experiencia sea rápida y respetuosa con las APIs.
 
 ## Puesta en marcha
 
@@ -32,6 +28,8 @@ $env:TMDB_API_KEY="tu_clave_tmdb"
 
 También puedes usar `TMDB_BEARER_TOKEN` si prefieres el token de lectura de API.
 
+La sección de mangas funciona con ComicK y MangaDex sin clave. Si quieres ocultarla temporalmente, puedes definir `COMICK_ENABLED=false` y `MANGADEX_ENABLED=false`.
+
 Otra opción cómoda es crear un archivo `.env` en la raíz con una de estas líneas:
 
 ```text
@@ -42,15 +40,28 @@ Si Windows o tu red bloquean la validación del certificado de TMDb, la app inte
 
 ## Funciones incluidas
 
-- Buscar series primero en TMDb y usar TVmaze como respaldo.
+- Buscar series en el catálogo de TMDb en español.
+- Buscar películas en el catálogo de TMDb y guardarlas como pendientes o vistas.
+- Buscar mangas y guardarlos en tu biblioteca.
 - Filtrar búsquedas por género, incluyendo Telenovela cuando la fuente lo marca como `Soap` o la serie encaja por nombre/cadena/sinopsis.
 - Ver póster, sinopsis, cadena, géneros y estado de cada serie.
+- Ver póster, sinopsis, estudio, géneros, duración y estado de cada película.
+- Ver portada, sinopsis, géneros, capítulos disponibles, estado y autores de cada manga.
 - Marcar episodios vistos uno a uno, hasta un punto concreto o todos los emitidos.
+- Marcar películas como vistas o pendientes desde el listado, la ficha o la búsqueda.
+- Marcar hasta el capítulo de manga por el que vas, por ejemplo `1035`, y ocultar capítulos ya leídos.
 - Ocultar capítulos vistos por defecto y mostrarlos cuando lo necesites.
 - Abrir una ventana emergente con más información al seleccionar un capítulo.
-- Consultar recomendaciones basadas en tus series vistas o completadas, filtrables por género y año, con orden reciente por defecto u orden por puntuación.
-- Ver recomendaciones agrupadas tipo "Para ti", "Tops del momento", "Porque viste..." y tops por género o cadena/plataforma cuando haya datos suficientes.
+- Consultar recomendaciones basadas en tus series vistas o completadas, filtrables por género, año, varias series de origen y actor, con orden por puntuación de forma predeterminada.
+- Consultar recomendaciones de películas basadas en tus películas vistas, actores y películas similares de TMDb.
+- Consultar recomendaciones de mangas basadas en tus mangas leídos, autores y sugerencias de AniList.
+- Rechazar recomendaciones para ocultarlas y volver a incluirlas o restaurarlas cuando lo necesites.
+- Ver recomendaciones agrupadas tipo "Para ti", "Porque viste...", por género y por actores que ya aparecen en tus series.
+- Consultar el reparto de una serie o película, abrir la ficha de cada actor y añadir otras series o películas en las que haya trabajado.
+- Consultar autores de un manga, abrir la ficha de cada autor y añadir otros mangas relacionados.
 - Añadir directamente una serie desde cada recomendación.
+- Añadir directamente una película desde cada recomendación de cine.
+- Añadir directamente un manga desde cada recomendación de manga.
 - Ver progreso por serie y el siguiente episodio pendiente.
 - Consultar una vista ordenada de próximos capítulos de tus series guardadas.
 - Ordenar el panel para priorizar series con pendientes según tu último episodio marcado como visto.

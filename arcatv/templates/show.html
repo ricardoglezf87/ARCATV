@@ -46,6 +46,36 @@
     </div>
 </section>
 
+{% if cast %}
+    <section class="cast-section">
+        <div class="section-heading">
+            <div>
+                <h2>Reparto</h2>
+                <p class="muted">Actores principales según TMDb.</p>
+            </div>
+        </div>
+        <div class="cast-list" aria-label="Reparto de {{ show.name }}">
+            {% for actor in cast %}
+                <a class="cast-card" href="{{ url_for('actor_detail', person_id=actor.id) }}">
+                    <span class="cast-photo">
+                        {% if actor.image_url %}
+                            <img src="{{ actor.image_url }}" alt="Foto de {{ actor.name }}" loading="lazy">
+                        {% else %}
+                            <span class="poster-fallback">{{ actor.name[:1] }}</span>
+                        {% endif %}
+                    </span>
+                    <span>
+                        <strong>{{ actor.name }}</strong>
+                        {% if actor.character %}
+                            <small>{{ actor.character }}</small>
+                        {% endif %}
+                    </span>
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+
 <section class="metrics-grid" aria-label="Progreso de {{ show.name }}">
     <div class="metric">
         <span>Progreso</span>
