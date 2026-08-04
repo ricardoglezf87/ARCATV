@@ -38,7 +38,8 @@ a {
 }
 
 button,
-input {
+input,
+select {
     font: inherit;
 }
 
@@ -47,7 +48,7 @@ input {
     top: 0;
     z-index: 10;
     display: grid;
-    grid-template-columns: auto 1fr minmax(260px, 360px);
+    grid-template-columns: auto 1fr minmax(300px, 430px);
     gap: 24px;
     align-items: center;
     padding: 14px clamp(18px, 4vw, 48px);
@@ -83,9 +84,31 @@ input {
 }
 
 .main-nav {
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 10px 18px;
     color: var(--muted);
     font-weight: 650;
+}
+
+.nav-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border-left: 1px solid var(--border);
+    padding-left: 12px;
+}
+
+.nav-group:first-child {
+    border-left: 0;
+    padding-left: 0;
+}
+
+.nav-label {
+    color: var(--coral);
+    font-size: 0.72rem;
+    font-weight: 850;
+    text-transform: uppercase;
 }
 
 .main-nav a:hover {
@@ -97,6 +120,7 @@ input {
 }
 
 .top-search input,
+.top-search select,
 .wide-search input,
 .wide-search select {
     min-width: 0;
@@ -510,6 +534,30 @@ input {
     margin-top: 18px;
 }
 
+.progress-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-top: 16px;
+}
+
+.progress-form label {
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 750;
+}
+
+.progress-form input[type="number"],
+.progress-form input[type="text"] {
+    width: 90px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 9px 11px;
+}
+
 .episode-heading {
     margin-top: 8px;
 }
@@ -610,6 +658,9 @@ input {
 
 .recommendation-poster {
     display: block;
+    align-self: start;
+    aspect-ratio: 2 / 3;
+    overflow: hidden;
     background: var(--surface-soft);
 }
 
@@ -658,7 +709,232 @@ input {
 }
 
 .recommendation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-top: 14px;
+}
+
+.filter-panel {
+    display: grid;
+    gap: 14px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 16px;
+}
+
+.filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.filter-row > label:not(.toggle-option) {
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 750;
+}
+
+.filter-row input,
+.filter-row select {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 9px 11px;
+}
+
+.filter-row input[type="search"] {
+    flex: 1 1 210px;
+}
+
+.source-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-height: 230px;
+    margin: 0;
+    border: 0;
+    overflow-y: auto;
+    padding: 8px 4px 4px;
+}
+
+.source-picker-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 12px;
+}
+
+.source-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    font-weight: 750;
+}
+
+.source-select-all input {
+    width: 17px;
+    height: 17px;
+    margin: 0;
+    accent-color: var(--primary);
+}
+
+.source-picker legend {
+    width: 100%;
+    margin-bottom: 7px;
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 750;
+}
+
+.source-selector {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 0;
+}
+
+.source-selector summary {
+    cursor: pointer;
+    color: var(--ink);
+    font-weight: 750;
+}
+
+.source-selector summary span {
+    margin-left: 8px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 650;
+}
+
+.source-picker label,
+.toggle-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-soft);
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.source-picker input,
+.toggle-option input {
+    width: 17px;
+    height: 17px;
+    margin: 0;
+    accent-color: var(--primary);
+}
+
+.actor-suggestions {
+    margin: -8px 0 24px;
+}
+
+.chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.recommendation-card.is-rejected {
+    border-color: #d8aaa3;
+    background: #fffafa;
+}
+
+.recommendation-rejected {
+    width: max-content;
+    margin: 10px 0 0;
+    border-radius: 8px;
+    background: #fff1ef;
+    color: var(--danger);
+    padding: 5px 9px;
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
+.cast-section {
+    margin: 30px 0;
+}
+
+.cast-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.cast-card {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-height: 70px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 8px;
+}
+
+.cast-card:hover {
+    border-color: var(--primary);
+}
+
+.cast-card strong,
+.cast-card small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cast-card small {
+    margin-top: 2px;
+    color: var(--muted);
+}
+
+.cast-photo {
+    display: grid;
+    width: 52px;
+    height: 52px;
+    overflow: hidden;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--surface-soft);
+}
+
+.cast-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.person-detail-header {
+    display: grid;
+    grid-template-columns: 185px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+    margin-bottom: 36px;
+}
+
+.person-photo {
+    display: grid;
+    width: 185px;
+    aspect-ratio: 2 / 3;
+    overflow: hidden;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--surface-soft);
+}
+
+.person-photo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .recommendation-reason {
@@ -792,12 +1068,17 @@ input {
 
     .content-layout,
     .show-detail-header,
+    .person-detail-header,
     .calendar-row {
         grid-template-columns: 1fr;
     }
 
     .detail-poster {
         width: min(220px, 100%);
+    }
+
+    .person-photo {
+        width: min(185px, 100%);
     }
 
     .metrics-grid {
@@ -833,9 +1114,13 @@ input {
     }
 
     .poster-link,
-    .result-poster,
-    .recommendation-poster {
+    .result-poster {
         height: 260px;
+    }
+
+    .recommendation-poster {
+        width: min(180px, 100%);
+        height: auto;
     }
 
     .recommendation-body h2 {
@@ -850,7 +1135,9 @@ input {
 
     .episode-actions,
     .header-actions,
-    .detail-actions {
+    .detail-actions,
+    .progress-form,
+    .filter-row {
         align-items: stretch;
         flex-direction: column;
     }
@@ -858,7 +1145,17 @@ input {
     .episode-actions .button,
     .header-actions .button,
     .detail-actions .button,
+    .progress-form input[type="number"],
+    .progress-form input[type="text"],
+    .progress-form .button,
     .result-title .button {
+        width: 100%;
+    }
+
+    .filter-row input,
+    .filter-row select,
+    .filter-row .button,
+    .toggle-option {
         width: 100%;
     }
 }

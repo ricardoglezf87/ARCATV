@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Buscar mangas - ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Catalogo MangaDex</p>
+        <h1>Buscar mangas</h1>
+    </div>
+</section>
+
+{% if not mangadex_enabled %}
+    <p class="inline-warning">MangaDex no esta configurado.</p>
+{% endif %}
+
+<form class="wide-search search-page-form" action="{{ url_for('manga_search') }}" method="get">
+    <label class="sr-only" for="manga-search">Nombre del manga</label>
+    <input id="manga-search" name="q" type="search" placeholder="Nombre del manga" value="{{ query }}" autofocus>
+    <label class="sr-only" for="manga-search-genre">Genero</label>
+    <select id="manga-search-genre" name="genero">
+        <option value="">Todos</option>
+        {% for genre in genres %}
+            <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
+        {% endfor %}
+    </select>
+    <button class="button button-primary" type="submit">Buscar</button>
+</form>
+
+{% if error %}
+    <p class="inline-warning">{{ error }}</p>
+{% endif %}
+
+{% if query and not results and not error %}
+    <section class="empty-state small">
+        <h2>Sin resultados para "{{ query }}"</h2>
+        <p>Prueba con el titulo original o una parte del nombre.</p>
+    </section>
+{% endif %}
+
+{% if results %}
+    <section class="results-list" aria-label="Resultados de busqueda de mangas">
+        {% for manga in results %}
+            <article class="result-row">
+                <a class="result-poster" href="{{ manga.official_url or '#' }}" target="_blank" rel="noreferrer">
+                    {% if manga.image_url %}
+                        <img src="{{ manga.image_url }}" alt="Portada de {{ manga.name }}" loading="lazy">
+                    {% else %}
+                        <span class="poster-fallback">{{ manga.name[:1] }}</span>
+                    {% endif %}
+                </a>
+                <div class="result-body">
+                    <div class="result-title">
+                        <div>
+                            <h2>{{ manga.name }}</h2>
+                            <p class="muted">
+                                {{ manga.status }}
+                                {% if manga.original_name and manga.original_name != manga.name %} - {{ manga.original_name }}{% endif %}
+                                {% if manga.premiered %} - {{ manga.premiered[:4] }}{% endif %}
+                                {% if manga.network %} - {{ manga.network }}{% endif %}
+                                {% if manga.source_label %} - {{ manga.source_label }}{% endif %}
+                            </p>
+                        </div>
+                        {% if manga.is_saved %}
+                            <a class="button button-secondary" href="{{ url_for('manga_detail', manga_id=manga.id) }}">Abrir</a>
+                        {% else %}
+                            <form action="{{ url_for('add_mangadex_manga') }}" method="post">
+                                <input type="hidden" name="q" value="{{ query }}">
+                                <input type="hidden" name="source_id" value="{{ manga.comick_id or manga.mangadex_id }}">
+                                <input type="hidden" name="source" value="{{ manga.source or 'mangadex' }}">
+                                <button class="button button-primary" type="submit">Anadir</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                    {% if manga.genres %}
+                        <p class="tags">{{ manga.genres | join(" - ") }}</p>
+                    {% endif %}
+                    <p>{{ manga.summary or "Sin sinopsis disponible." }}</p>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}

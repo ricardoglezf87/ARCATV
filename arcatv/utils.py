@@ -4,30 +4,6 @@ from collections import OrderedDict
 from datetime import date, datetime, timezone
 
 
-SPANISH_COUNTRIES = [
-    "ES",
-    "MX",
-    "AR",
-    "CL",
-    "CO",
-    "PE",
-    "VE",
-    "UY",
-    "PY",
-    "BO",
-    "EC",
-    "CR",
-    "CU",
-    "DO",
-    "GT",
-    "HN",
-    "NI",
-    "PA",
-    "PR",
-    "SV",
-    "GQ",
-]
-
 STATUS_TRANSLATIONS = {
     "Running": "En emisión",
     "Returning Series": "En emisión",
@@ -37,6 +13,10 @@ STATUS_TRANSLATIONS = {
     "Pilot": "Piloto",
     "To Be Determined": "Por confirmar",
     "In Development": "En desarrollo",
+    "Released": "Estrenada",
+    "Post Production": "Postproduccion",
+    "Planned": "Planeada",
+    "Rumored": "Rumoreada",
 }
 
 GENRE_TRANSLATIONS = {
@@ -70,6 +50,7 @@ GENRE_TRANSLATIONS = {
     "Sports": "Deportes",
     "Supernatural": "Sobrenatural",
     "Thriller": "Suspense",
+    "TV Movie": "Pelicula de TV",
     "Travel": "Viajes",
     "War": "Bélica",
     "War & Politics": "Bélica y política",
@@ -113,24 +94,6 @@ def strip_html(value):
     return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
 
 
-def preferred_spanish_name(akas):
-    if not akas:
-        return None
-
-    by_country = {}
-    for aka in akas:
-        country = aka.get("country") or {}
-        code = country.get("code")
-        name = aka.get("name")
-        if code and name and code not in by_country:
-            by_country[code] = name
-
-    for code in SPANISH_COUNTRIES:
-        if by_country.get(code):
-            return by_country[code]
-    return None
-
-
 def translated_status(status):
     return STATUS_TRANSLATIONS.get(status, status or "Sin estado")
 
@@ -154,35 +117,6 @@ def translated_genres(genres, show=None, network=None):
         translated.append("Telenovela")
 
     return sorted(dict.fromkeys(translated))
-
-
-def normalize_show(show, akas=None):
-    network = show.get("network") or show.get("webChannel") or {}
-    image = show.get("image") or {}
-    original_name = show.get("name") or "Sin título"
-    spanish_name = preferred_spanish_name(akas)
-
-    return {
-        "id": show["id"],
-        "name": spanish_name or original_name,
-        "original_name": original_name,
-        "premiered": show.get("premiered"),
-        "ended": show.get("ended"),
-        "status": translated_status(show.get("status")),
-        "language": show.get("language") or "Sin idioma",
-        "genres": translated_genres(show.get("genres"), show=show, network=network),
-        "summary": strip_html(show.get("summary")),
-        "image_url": image.get("medium") or image.get("original"),
-        "official_url": show.get("officialSite") or show.get("url"),
-        "network": network.get("name") if network else None,
-    }
-
-
-def normalize_search_result(result, saved_ids, akas=None):
-    show = normalize_show(result["show"], akas=akas)
-    show["score"] = result.get("score", 0)
-    show["is_saved"] = show["id"] in saved_ids
-    return show
 
 
 def parse_airdate(value):
