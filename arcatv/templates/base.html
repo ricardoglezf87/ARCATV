@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}ARCATV{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="{{ url_for('dashboard') }}" aria-label="Ir al panel de ARCATV">
+            <span class="brand-mark">A</span>
+            <span>ARCATV</span>
+        </a>
+        <nav class="main-nav" aria-label="Navegación principal">
+            <div class="nav-group">
+                <span class="nav-label">Series</span>
+                <a href="{{ url_for('dashboard') }}">Mis series</a>
+                <a href="{{ url_for('upcoming') }}">Proximos</a>
+                <a href="{{ url_for('recommendations') }}">Recomendaciones</a>
+                <a href="{{ url_for('search') }}">Buscar</a>
+            </div>
+            <div class="nav-group">
+                <span class="nav-label">Peliculas</span>
+                <a href="{{ url_for('movies_dashboard') }}">Mis peliculas</a>
+                <a href="{{ url_for('movie_recommendations') }}">Recomendaciones</a>
+                <a href="{{ url_for('movie_search') }}">Buscar</a>
+            </div>
+            <div class="nav-group">
+                <span class="nav-label">Mangas</span>
+                <a href="{{ url_for('mangas_dashboard') }}">Mis mangas</a>
+                <a href="{{ url_for('manga_recommendations') }}">Recomendaciones</a>
+                <a href="{{ url_for('manga_search') }}">Buscar</a>
+            </div>
+        </nav>
+        {% set movie_context = request.endpoint in ["movies_dashboard", "movie_detail", "movie_recommendations", "movie_search"] %}
+        {% set manga_context = request.endpoint in ["mangas_dashboard", "manga_detail", "manga_recommendations", "manga_search", "author_detail"] %}
+        <form class="top-search" action="{{ url_for('global_search') }}" method="get">
+            <label class="sr-only" for="global-search-type">Tipo de busqueda</label>
+            <select id="global-search-type" name="tipo">
+                <option value="series" {% if not movie_context and not manga_context %}selected{% endif %}>Series</option>
+                <option value="peliculas" {% if movie_context %}selected{% endif %}>Peliculas</option>
+                <option value="mangas" {% if manga_context %}selected{% endif %}>Mangas</option>
+            </select>
+            <label class="sr-only" for="global-search">Buscar</label>
+            <input id="global-search" name="q" type="search" placeholder="Buscar" value="{{ request.args.get('q', '') }}">
+            <button type="submit">Buscar</button>
+        </form>
+    </header>
+
+    <main class="page-shell">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="messages" aria-live="polite">
+                    {% for category, message in messages %}
+                        <p class="message message-{{ category }}">{{ message }}</p>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <span>Datos de series y peliculas proporcionados por</span>
+        <a href="https://developer.themoviedb.org/reference/getting-started" target="_blank" rel="noreferrer">TMDb</a>
+        <span>y datos de mangas por</span>
+        <a href="https://comick.dev/" target="_blank" rel="noreferrer">ComicK</a>
+        <span>y</span>
+        <a href="https://api.mangadex.org/docs/" target="_blank" rel="noreferrer">MangaDex</a>
+    </footer>
+</body>
+</html>

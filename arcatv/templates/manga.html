@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}{{ manga.name }} - ARCATV{% endblock %}
+
+{% block content %}
+<section class="show-detail-header">
+    <div class="detail-poster">
+        {% if manga.image_url %}
+            <img src="{{ manga.image_url }}" alt="Portada de {{ manga.name }}">
+        {% else %}
+            <span class="poster-fallback">{{ manga.name[:1] }}</span>
+        {% endif %}
+    </div>
+    <div class="detail-copy">
+        <p class="eyebrow">Ficha de manga</p>
+        <h1>{{ manga.name }}</h1>
+        <p class="muted">
+            {{ manga.status }}
+            {% if manga.original_name and manga.original_name != manga.name %} - {{ manga.original_name }}{% endif %}
+            {% if manga.premiered %} - {{ manga.premiered[:4] }}{% endif %}
+            {% if manga.network %} - {{ manga.network }}{% endif %}
+            {% if manga.latest_chapter %} - ultimo cap. {{ manga.latest_chapter }}{% elif manga.chapters %} - {{ manga.chapters }} caps.{% endif %}
+            {% if manga.volumes %} - {{ manga.volumes }} vols.{% endif %}
+        </p>
+        {% if manga.genres %}
+            <p class="tags">{{ manga.genres | join(" - ") }}</p>
+        {% endif %}
+        <p>{{ manga.summary or "Sin sinopsis disponible." }}</p>
+        <div class="detail-actions">
+            <form action="{{ url_for('refresh_manga', manga_id=manga.id) }}" method="post">
+                <button class="button button-secondary" type="submit">Actualizar</button>
+            </form>
+            {% if manga.official_url %}
+                <a class="button button-secondary" href="{{ manga.official_url }}" target="_blank" rel="noreferrer">Abrir en {{ manga.source_label or manga.network or "fuente" }}</a>
+            {% endif %}
+            {% if manga.chapter_read or manga.read or manga.volumes_read %}
+                <form action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
+                    <input type="hidden" name="next" value="{{ request.full_path }}">
+                    <input type="hidden" name="chapter_read" value="">
+                    <button class="button button-secondary" type="submit">Reiniciar progreso</button>
+                </form>
+            {% endif %}
+            <form action="{{ url_for('remove_manga', manga_id=manga.id) }}" method="post">
+                <button class="button button-danger" type="submit">Quitar</button>
+            </form>
+        </div>
+        {% if not manga.comick_id and not manga.mangadex_id %}
+            <form class="progress-form" action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                {% if manga.read %}
+                    <input type="hidden" name="read" value="0">
+                    <button class="button button-secondary" type="submit">Quitar leido</button>
+                {% else %}
+                    <input type="hidden" name="read" value="1">
+                    <button class="button button-primary" type="submit">Marcar leido</button>
+                {% endif %}
+            </form>
+        {% endif %}
+    </div>
+</section>
+
+<section class="metrics-grid" aria-label="Estado de {{ manga.name }}">
+    <div class="metric">
+        <span>Estado</span>
+        <strong>{{ "Leido" if manga.read else "En progreso" if manga.in_progress else "Pendiente" }}</strong>
+    </div>
+    <div class="metric">
+        <span>Progreso</span>
+        <strong>{{ manga.progress_label }}</strong>
+    </div>
+    <div class="metric">
+        <span>Siguiente</span>
+        <strong>{% if manga.next_chapter %}Cap. {{ manga.next_chapter.chapter }}{% else %}N/D{% endif %}</strong>
+    </div>
+    <div class="metric">
+        <span>Ultimo disponible</span>
+        <strong>{{ manga.latest_chapter or "N/D" }}</strong>
+    </div>
+</section>
+
+{% if manga.comick_id or manga.mangadex_id %}
+    <section class="section-heading">
+        <div>
+            <h2>Capitulos</h2>
+            <p class="muted">{{ visible_chapter_count }} visibles de {{ total_chapters }} encontrados.</p>
+        </div>
+        <div class="header-actions">
+            {% if show_read_chapters %}
+                <a class="button button-secondary" href="{{ url_for('manga_detail', manga_id=manga.id) }}">Ocultar leidos</a>
+            {% else %}
+                <a class="button button-secondary" href="{{ url_for('manga_detail', manga_id=manga.id, leidos=1) }}">Mostrar leidos</a>
+            {% endif %}
+        </div>
+    </section>
+
+    {% if chapters %}
+        <section class="episode-list" aria-label="Capitulos de {{ manga.name }}">
+            {% for chapter in chapters %}
+                <article class="episode-row {% if chapter.read %}is-watched{% endif %}">
+                    <div class="episode-main">
+                        <span class="episode-code">Cap. {{ chapter.chapter or "N/D" }}</span>
+                        <div>
+                            <h4>{{ chapter.title or "Sin titulo disponible" }}</h4>
+                            <p class="muted">
+                                {% if chapter.volume %}Tomo {{ chapter.volume }} - {% endif %}
+                                {% if chapter.language %}{{ chapter.language|upper }}{% endif %}
+                                {% if chapter.language and chapter.group %} - {% endif %}
+                                {% if chapter.group %}{{ chapter.group }}{% endif %}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="episode-actions">
+                        {% if chapter.official_url %}
+                            <a class="button button-secondary" href="{{ chapter.official_url }}" target="_blank" rel="noreferrer">Abrir</a>
+                        {% endif %}
+                        {% if chapter.chapter %}
+                            <form action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
+                                <input type="hidden" name="next" value="{{ request.full_path }}">
+                                <input type="hidden" name="chapter_read" value="{{ chapter.chapter }}">
+                                <button class="button {% if chapter.read %}button-secondary{% else %}button-primary{% endif %}" type="submit">Marcar hasta aqui</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </article>
+            {% endfor %}
+        </section>
+    {% else %}
+        <section class="empty-state small">
+            <h2>No hay capitulos visibles</h2>
+            <p>MangaDex no ha devuelto capitulos en espanol o ingles para este manga.</p>
+        </section>
+    {% endif %}
+{% endif %}
+
+{% if authors %}
+    <section class="cast-section">
+        <div class="section-heading">
+            <div>
+                <h2>Autores</h2>
+                <p class="muted">Staff principal segun AniList.</p>
+            </div>
+        </div>
+        <div class="cast-list" aria-label="Autores de {{ manga.name }}">
+            {% for author in authors %}
+                <a class="cast-card" href="{{ url_for('author_detail', staff_id=author.id) }}">
+                    <span class="cast-photo">
+                        {% if author.image_url %}
+                            <img src="{{ author.image_url }}" alt="Foto de {{ author.name }}" loading="lazy">
+                        {% else %}
+                            <span class="poster-fallback">{{ author.name[:1] }}</span>
+                        {% endif %}
+                    </span>
+                    <span>
+                        <strong>{{ author.name }}</strong>
+                        {% if author.role %}
+                            <small>{{ author.role }}</small>
+                        {% endif %}
+                    </span>
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+{% endblock %}

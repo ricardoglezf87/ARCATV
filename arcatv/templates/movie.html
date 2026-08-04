@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ movie.name }} - ARCATV{% endblock %}
+
+{% block content %}
+<section class="show-detail-header">
+    <div class="detail-poster">
+        {% if movie.image_url %}
+            <img src="{{ movie.image_url }}" alt="Poster de {{ movie.name }}">
+        {% else %}
+            <span class="poster-fallback">{{ movie.name[:1] }}</span>
+        {% endif %}
+    </div>
+    <div class="detail-copy">
+        <p class="eyebrow">Ficha de pelicula</p>
+        <h1>{{ movie.name }}</h1>
+        <p class="muted">
+            {{ movie.status }}
+            {% if movie.original_name and movie.original_name != movie.name %} - {{ movie.original_name }}{% endif %}
+            {% if movie.premiered %} - {{ movie.premiered[:4] }}{% endif %}
+            {% if movie.network %} - {{ movie.network }}{% endif %}
+            {% if movie.runtime %} - {{ movie.runtime }} min{% endif %}
+        </p>
+        {% if movie.genres %}
+            <p class="tags">{{ movie.genres | join(" - ") }}</p>
+        {% endif %}
+        <p>{{ movie.summary or "Sin sinopsis disponible." }}</p>
+        <div class="detail-actions">
+            <form action="{{ url_for('refresh_movie', movie_id=movie.id) }}" method="post">
+                <button class="button button-secondary" type="submit">Actualizar</button>
+            </form>
+            <form action="{{ url_for('set_movie_watched', movie_id=movie.id) }}" method="post">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                {% if movie.watched %}
+                    <input type="hidden" name="watched" value="0">
+                    <button class="button button-secondary" type="submit">Quitar visto</button>
+                {% else %}
+                    <input type="hidden" name="watched" value="1">
+                    <button class="button button-primary" type="submit">Marcar vista</button>
+                {% endif %}
+            </form>
+            <a class="button button-secondary" href="{{ movie.official_url }}" target="_blank" rel="noreferrer">Abrir en TMDb</a>
+            <form action="{{ url_for('remove_movie', movie_id=movie.id) }}" method="post">
+                <button class="button button-danger" type="submit">Quitar</button>
+            </form>
+        </div>
+    </div>
+</section>
+
+<section class="metrics-grid" aria-label="Estado de {{ movie.name }}">
+    <div class="metric">
+        <span>Estado</span>
+        <strong>{{ "Vista" if movie.watched else "Pendiente" }}</strong>
+    </div>
+    <div class="metric">
+        <span>Estreno</span>
+        <strong>{{ movie.premiered[:4] if movie.premiered else "N/D" }}</strong>
+    </div>
+    <div class="metric">
+        <span>Duracion</span>
+        <strong>{{ movie.runtime if movie.runtime else "N/D" }}</strong>
+    </div>
+</section>
+
+{% if cast %}
+    <section class="cast-section">
+        <div class="section-heading">
+            <div>
+                <h2>Reparto</h2>
+                <p class="muted">Actores principales segun TMDb.</p>
+            </div>
+        </div>
+        <div class="cast-list" aria-label="Reparto de {{ movie.name }}">
+            {% for actor in cast %}
+                <a class="cast-card" href="{{ url_for('actor_detail', person_id=actor.id) }}">
+                    <span class="cast-photo">
+                        {% if actor.image_url %}
+                            <img src="{{ actor.image_url }}" alt="Foto de {{ actor.name }}" loading="lazy">
+                        {% else %}
+                            <span class="poster-fallback">{{ actor.name[:1] }}</span>
+                        {% endif %}
+                    </span>
+                    <span>
+                        <strong>{{ actor.name }}</strong>
+                        {% if actor.character %}
+                            <small>{{ actor.character }}</small>
+                        {% endif %}
+                    </span>
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+{% endblock %}

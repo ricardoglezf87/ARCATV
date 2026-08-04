@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Recomendaciones · ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Según tu progreso</p>
+        <h1>Recomendaciones</h1>
+    </div>
+</section>
+
+{% if sync_errors %}
+    <p class="inline-warning">Algunas fuentes no respondieron ahora: {{ sync_errors | join(", ") }}.</p>
+{% endif %}
+
+{% if not tmdb_enabled %}
+    <p class="inline-warning">TMDb no está configurado. Configura TMDB_API_KEY o TMDB_BEARER_TOKEN para buscar, ver reparto y recibir recomendaciones.</p>
+{% endif %}
+
+<form class="filter-panel" action="{{ url_for('recommendations') }}" method="get">
+    <input type="hidden" name="fuentes" value="seleccionadas">
+    <div class="filter-row">
+        <label for="genre-filter">Género</label>
+        <select id="genre-filter" name="genero">
+            <option value="">Todos</option>
+            {% for genre in genres %}
+                <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
+            {% endfor %}
+        </select>
+        <label for="year-from">Desde</label>
+        <input id="year-from" name="desde" type="number" min="1900" max="{{ current_year + 1 }}" value="{{ year_from or '' }}">
+        <label for="year-to">Hasta</label>
+        <input id="year-to" name="hasta" type="number" min="1900" max="{{ current_year + 1 }}" value="{{ year_to or '' }}">
+        <label for="sort-mode">Orden</label>
+        <select id="sort-mode" name="orden">
+            <option value="puntuacion" {% if sort_mode == "puntuacion" %}selected{% endif %}>Mejor puntuación</option>
+            <option value="recientes" {% if sort_mode == "recientes" %}selected{% endif %}>Más recientes</option>
+        </select>
+    </div>
+
+    {% if source_options %}
+        <details class="source-selector" {% if source_filter_submitted %}open{% endif %}>
+            <summary>
+                Elegir series para «Porque viste»
+                <span id="source-summary-count">{{ selected_source_ids|length if source_filter_submitted else source_options|length }} seleccionadas</span>
+            </summary>
+            <div class="source-picker-toolbar">
+                <label class="source-select-all">
+                    <input
+                        id="source-select-all"
+                        type="checkbox"
+                        {% if not source_filter_submitted or selected_source_ids|length == source_options|length %}checked{% endif %}
+                    >
+                    <span>Seleccionar todas</span>
+                </label>
+                <span class="muted" id="source-selection-count">{{ selected_source_ids|length if source_filter_submitted else source_options|length }} de {{ source_options|length }}</span>
+            </div>
+            <fieldset class="source-picker">
+                <legend class="sr-only">Porque viste</legend>
+                {% for source in source_options %}
+                    <label>
+                        <input
+                            type="checkbox"
+                            name="origen"
+                            value="{{ source.id }}"
+                            {% if not source_filter_submitted or source.id in selected_source_ids %}checked{% endif %}
+                        >
+                        <span>{{ source.name }}</span>
+                    </label>
+                {% endfor %}
+            </fieldset>
+        </details>
+    {% endif %}
+
+    <div class="filter-row">
+        <label for="actor-filter">Actor</label>
+        <input id="actor-filter" name="actor" type="search" placeholder="Nombre del actor" value="{{ actor_query }}">
+        {% if selected_actor %}
+            <input type="hidden" name="actor_id" value="{{ selected_actor.id }}">
+            <span class="status-pill">Usando {{ selected_actor.name }}</span>
+        {% endif %}
+        <label class="toggle-option">
+            <input type="checkbox" name="rechazadas" value="1" {% if include_rejected %}checked{% endif %}>
+            <span>Incluir rechazadas</span>
+        </label>
+        <button class="button button-secondary" type="submit">Filtrar</button>
+        {% if selected_genre or year_from or year_to or sort_mode != "puntuacion" or include_rejected or actor_query or source_filter_submitted %}
+            <a class="button button-secondary" href="{{ url_for('recommendations') }}">Limpiar</a>
+        {% endif %}
+    </div>
+</form>
+
+{% if actor_search_results|length > 1 and not request.args.get("actor_id") %}
+    <section class="actor-suggestions" aria-label="Actores encontrados">
+        <p class="muted">Actores encontrados</p>
+        <div class="chip-list">
+            {% for actor in actor_search_results %}
+                <a class="button button-secondary" href="{{ url_for('recommendations', actor=actor_query, actor_id=actor.id, genero=selected_genre, desde=year_from, hasta=year_to, orden=sort_mode, rechazadas='1' if include_rejected else '') }}">{{ actor.name }}</a>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+
+{% macro recommendation_card(show) %}
+    <article class="recommendation-card {% if show.is_rejected %}is-rejected{% endif %}">
+        <a class="recommendation-poster" href="{{ show.official_url or '#' }}" target="_blank" rel="noreferrer">
+            {% if show.image_url %}
+                <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}" loading="lazy">
+            {% else %}
+                <span class="poster-fallback">{{ show.name[:1] }}</span>
+            {% endif %}
+        </a>
+        <div class="recommendation-body">
+            <div class="recommendation-score">
+                <span>Nota</span>
+                <strong>{{ "%.1f"|format(show.rating) if show.rating else "N/D" }}</strong>
+            </div>
+            <h2>{{ show.name }}</h2>
+            <p class="muted">
+                {{ show.status }}
+                {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
+                {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
+                {% if show.network %} · {{ show.network }}{% endif %}
+                {% if show.source_label %} · {{ show.source_label }}{% endif %}
+            </p>
+            {% if show.is_rejected %}
+                <p class="recommendation-rejected">Rechazada</p>
+            {% endif %}
+            {% if show.reason %}
+                <p class="recommendation-reason">{{ show.reason }}</p>
+            {% endif %}
+            {% if show.reason_detail %}
+                <p class="muted">{{ show.reason_detail }}</p>
+            {% endif %}
+            {% if show.matched_genres %}
+                <p class="tags">{{ show.matched_genres | join(" · ") }}</p>
+            {% endif %}
+            <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
+            <div class="recommendation-actions">
+                {% if show.is_rejected %}
+                    <form action="{{ url_for('restore_recommendation', show_id=show.id) }}" method="post">
+                        <input type="hidden" name="next" value="{{ request.full_path }}">
+                        <button class="button button-secondary" type="submit">Restaurar</button>
+                    </form>
+                {% else %}
+                    <form action="{{ url_for('add_show', show_id=show.id) }}" method="post">
+                        <input type="hidden" name="next" value="{{ request.full_path }}">
+                        <button class="button button-primary" type="submit">Añadir</button>
+                    </form>
+                    <form action="{{ url_for('reject_recommendation', show_id=show.id) }}" method="post">
+                        <input type="hidden" name="next" value="{{ request.full_path }}">
+                        <input type="hidden" name="name" value="{{ show.name }}">
+                        <input type="hidden" name="original_name" value="{{ show.original_name or '' }}">
+                        <input type="hidden" name="source" value="{{ show.source or 'tmdb' }}">
+                        <button class="button button-danger" type="submit">Rechazar</button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+    </article>
+{% endmacro %}
+
+{% if not recommendations %}
+    <section class="empty-state small">
+        <h2>Sin recomendaciones todavía</h2>
+        <p>Marca capítulos como vistos, elige una serie base o busca un actor para crear recomendaciones.</p>
+    </section>
+{% else %}
+    {% for section in sections %}
+        <section class="recommendation-section">
+            <div class="section-heading">
+                <div>
+                    <h2>{{ section.title }}</h2>
+                    <p class="muted">{{ section.subtitle }}</p>
+                </div>
+            </div>
+            <div class="recommendation-grid" aria-label="{{ section.title }}">
+                {% for show in section["items"] %}
+                    {{ recommendation_card(show) }}
+                {% endfor %}
+            </div>
+        </section>
+    {% endfor %}
+{% endif %}
+{% endblock %}

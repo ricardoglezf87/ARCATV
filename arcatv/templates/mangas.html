@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Mis mangas - ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Seguimiento personal</p>
+        <h1>Mis mangas</h1>
+    </div>
+    <div class="header-actions">
+        <form action="{{ url_for('refresh_mangas_library') }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <button class="button button-secondary" type="submit">Actualizar</button>
+        </form>
+        <a class="button button-secondary" href="{{ url_for('manga_recommendations') }}">Recomendaciones</a>
+        <a class="button button-primary" href="{{ url_for('manga_search') }}">Anadir manga</a>
+    </div>
+</section>
+
+<div class="view-toggles" aria-label="Filtro de mangas">
+    {% if status_filter == "todas" %}
+        <a class="button button-secondary" href="{{ url_for('mangas_dashboard') }}">Mostrar solo pendientes</a>
+    {% else %}
+        <a class="button button-secondary" href="{{ url_for('mangas_dashboard', estado='todas') }}">Ver todos</a>
+        {% if totals.read %}
+            <span class="muted">{{ totals.read }} leidos ocultos</span>
+        {% endif %}
+    {% endif %}
+</div>
+
+<section class="metrics-grid" aria-label="Resumen de mangas">
+    <div class="metric">
+        <span>Mangas</span>
+        <strong>{{ totals.mangas }}</strong>
+    </div>
+    <div class="metric">
+        <span>Leidos</span>
+        <strong>{{ totals.read }}</strong>
+    </div>
+    <div class="metric">
+        <span>En progreso</span>
+        <strong>{{ totals.in_progress }}</strong>
+    </div>
+    <div class="metric">
+        <span>Pendientes</span>
+        <strong>{{ totals.pending }}</strong>
+    </div>
+</section>
+
+{% if not mangas %}
+    <section class="empty-state">
+        {% if totals.mangas %}
+            <h2>No tienes mangas pendientes</h2>
+            <p>Los mangas completados estan ocultos para que esta vista funcione como una lista de pendientes.</p>
+        {% else %}
+            <h2>Empieza buscando un manga</h2>
+            <p>Guarda mangas pendientes y actualiza el capitulo por el que vas para alimentar tus recomendaciones.</p>
+        {% endif %}
+        <form class="wide-search" action="{{ url_for('manga_search') }}" method="get">
+            <label class="sr-only" for="empty-manga-search">Nombre del manga</label>
+            <input id="empty-manga-search" name="q" type="search" placeholder="Berserk, Monster, Vagabond...">
+            <button class="button button-primary" type="submit">Buscar</button>
+        </form>
+    </section>
+{% else %}
+    <section class="show-grid" aria-label="Tus mangas">
+        {% for manga in mangas %}
+            <article class="show-card">
+                <a class="poster-link" href="{{ url_for('manga_detail', manga_id=manga.id) }}" aria-label="Abrir {{ manga.name }}">
+                    {% if manga.image_url %}
+                        <img src="{{ manga.image_url }}" alt="Portada de {{ manga.name }}" loading="lazy">
+                    {% else %}
+                        <span class="poster-fallback">{{ manga.name[:1] }}</span>
+                    {% endif %}
+                </a>
+                <div class="show-card-body">
+                    <div class="show-card-title">
+                        <h2><a href="{{ url_for('manga_detail', manga_id=manga.id) }}">{{ manga.name }}</a></h2>
+                        <span class="status-pill">{{ "Leido" if manga.read else "En progreso" if manga.in_progress else "Pendiente" }}</span>
+                    </div>
+                    <p class="muted">
+                        {% if manga.premiered %}{{ manga.premiered[:4] }}{% else %}Sin fecha{% endif %}
+                        {% if manga.network %} - {{ manga.network }}{% endif %}
+                        {% if manga.latest_chapter %} - ultimo cap. {{ manga.latest_chapter }}{% elif manga.chapters %} - {{ manga.chapters }} caps.{% endif %}
+                        {% if manga.chapter_read or manga.volumes %} - {{ manga.progress_label }}{% endif %}
+                    </p>
+                    {% if manga.genres %}
+                        <p class="tags">{{ manga.genres | join(" - ") }}</p>
+                    {% endif %}
+                    <div class="recommendation-actions">
+                        <a class="button button-secondary" href="{{ url_for('manga_detail', manga_id=manga.id) }}">Abrir</a>
+                        <form action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
+                            <input type="hidden" name="next" value="{{ request.full_path }}">
+                            {% if manga.next_chapter %}
+                                <input type="hidden" name="chapter_read" value="{{ manga.next_chapter.chapter }}">
+                                <button class="button button-primary" type="submit">Sumar capitulo</button>
+                            {% elif manga.volumes and not manga.read %}
+                                <input type="hidden" name="volumes_read" value="{{ manga.next_volume_count }}">
+                                <button class="button button-primary" type="submit">Sumar tomo</button>
+                            {% elif manga.read %}
+                                <input type="hidden" name="read" value="0">
+                                <button class="button button-secondary" type="submit">Reiniciar</button>
+                            {% else %}
+                                <input type="hidden" name="read" value="1">
+                                <button class="button button-primary" type="submit">Marcar leido</button>
+                            {% endif %}
+                        </form>
+                    </div>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}

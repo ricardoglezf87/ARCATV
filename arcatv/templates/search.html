@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Buscar series · ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Catálogo TMDb en español</p>
+        <h1>Buscar series</h1>
+    </div>
+</section>
+
+<form class="wide-search search-page-form" action="{{ url_for('search') }}" method="get">
+    <label class="sr-only" for="series-search">Nombre de la serie</label>
+    <input id="series-search" name="q" type="search" placeholder="Nombre de la serie" value="{{ query }}" autofocus>
+    <label class="sr-only" for="search-genre">Género</label>
+    <select id="search-genre" name="genero">
+        <option value="">Todos</option>
+        {% for genre in genres %}
+            <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
+        {% endfor %}
+    </select>
+    <button class="button button-primary" type="submit">Buscar</button>
+</form>
+
+{% if error %}
+    <p class="inline-warning">{{ error }}</p>
+{% endif %}
+
+{% if query and not results and not error %}
+    <section class="empty-state small">
+        <h2>Sin resultados para “{{ query }}”</h2>
+        <p>Prueba con el título original o una parte del nombre.</p>
+    </section>
+{% endif %}
+
+{% if results %}
+    <section class="results-list" aria-label="Resultados de búsqueda">
+        {% for show in results %}
+            <article class="result-row">
+                <a class="result-poster" href="{{ show.official_url or '#' }}" target="_blank" rel="noreferrer">
+                    {% if show.image_url %}
+                        <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}" loading="lazy">
+                    {% else %}
+                        <span class="poster-fallback">{{ show.name[:1] }}</span>
+                    {% endif %}
+                </a>
+                <div class="result-body">
+                    <div class="result-title">
+                        <div>
+                            <h2>{{ show.name }}</h2>
+                            <p class="muted">
+                                {{ show.status }}
+                                {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
+                                {% if show.premiered %} · {{ show.premiered[:4] }}{% endif %}
+                                {% if show.network %} · {{ show.network }}{% endif %}
+                                {% if show.source_label %} · {{ show.source_label }}{% endif %}
+                            </p>
+                        </div>
+                        {% if show.is_saved %}
+                            <a class="button button-secondary" href="{{ url_for('show_detail', show_id=show.id) }}">Abrir</a>
+                        {% else %}
+                            <form action="{{ url_for('add_show', show_id=show.id) }}" method="post">
+                                <input type="hidden" name="q" value="{{ query }}">
+                                <button class="button button-primary" type="submit">Añadir</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                    {% if show.genres %}
+                        <p class="tags">{{ show.genres | join(" · ") }}</p>
+                    {% endif %}
+                    <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}

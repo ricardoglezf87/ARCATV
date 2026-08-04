@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Buscar peliculas - ARCATV{% endblock %}
+
+{% block content %}
+<section class="dashboard-header">
+    <div>
+        <p class="eyebrow">Catalogo TMDb en espanol</p>
+        <h1>Buscar peliculas</h1>
+    </div>
+</section>
+
+<form class="wide-search search-page-form" action="{{ url_for('movie_search') }}" method="get">
+    <label class="sr-only" for="movie-search">Nombre de la pelicula</label>
+    <input id="movie-search" name="q" type="search" placeholder="Nombre de la pelicula" value="{{ query }}" autofocus>
+    <label class="sr-only" for="movie-search-genre">Genero</label>
+    <select id="movie-search-genre" name="genero">
+        <option value="">Todos</option>
+        {% for genre in genres %}
+            <option value="{{ genre }}" {% if selected_genre == genre %}selected{% endif %}>{{ genre }}</option>
+        {% endfor %}
+    </select>
+    <button class="button button-primary" type="submit">Buscar</button>
+</form>
+
+{% if error %}
+    <p class="inline-warning">{{ error }}</p>
+{% endif %}
+
+{% if query and not results and not error %}
+    <section class="empty-state small">
+        <h2>Sin resultados para "{{ query }}"</h2>
+        <p>Prueba con el titulo original o una parte del nombre.</p>
+    </section>
+{% endif %}
+
+{% if results %}
+    <section class="results-list" aria-label="Resultados de busqueda de peliculas">
+        {% for movie in results %}
+            <article class="result-row">
+                <a class="result-poster" href="{{ movie.official_url or '#' }}" target="_blank" rel="noreferrer">
+                    {% if movie.image_url %}
+                        <img src="{{ movie.image_url }}" alt="Poster de {{ movie.name }}" loading="lazy">
+                    {% else %}
+                        <span class="poster-fallback">{{ movie.name[:1] }}</span>
+                    {% endif %}
+                </a>
+                <div class="result-body">
+                    <div class="result-title">
+                        <div>
+                            <h2>{{ movie.name }}</h2>
+                            <p class="muted">
+                                {{ movie.status }}
+                                {% if movie.original_name and movie.original_name != movie.name %} - {{ movie.original_name }}{% endif %}
+                                {% if movie.premiered %} - {{ movie.premiered[:4] }}{% endif %}
+                                {% if movie.network %} - {{ movie.network }}{% endif %}
+                                {% if movie.source_label %} - {{ movie.source_label }}{% endif %}
+                            </p>
+                        </div>
+                        {% if movie.is_saved %}
+                            <a class="button button-secondary" href="{{ url_for('movie_detail', movie_id=movie.id) }}">Abrir</a>
+                        {% else %}
+                            <div class="recommendation-actions">
+                                <form action="{{ url_for('add_movie', movie_id=movie.id) }}" method="post">
+                                    <input type="hidden" name="q" value="{{ query }}">
+                                    <button class="button button-secondary" type="submit">Anadir</button>
+                                </form>
+                                <form action="{{ url_for('add_movie', movie_id=movie.id) }}" method="post">
+                                    <input type="hidden" name="q" value="{{ query }}">
+                                    <input type="hidden" name="watched" value="1">
+                                    <button class="button button-primary" type="submit">Anadir vista</button>
+                                </form>
+                            </div>
+                        {% endif %}
+                    </div>
+                    {% if movie.genres %}
+                        <p class="tags">{{ movie.genres | join(" - ") }}</p>
+                    {% endif %}
+                    <p>{{ movie.summary or "Sin sinopsis disponible." }}</p>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+{% endif %}
+{% endblock %}

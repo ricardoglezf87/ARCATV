@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}{{ show.name }} · ARCATV{% endblock %}
+
+{% block content %}
+{% if sync_error %}
+    <p class="inline-warning">No se pudieron actualizar los episodios: {{ sync_error }}</p>
+{% endif %}
+
+<section class="show-detail-header">
+    <div class="detail-poster">
+        {% if show.image_url %}
+            <img src="{{ show.image_url }}" alt="Póster de {{ show.name }}">
+        {% else %}
+            <span class="poster-fallback">{{ show.name[:1] }}</span>
+        {% endif %}
+    </div>
+    <div class="detail-copy">
+        <p class="eyebrow">Ficha de serie</p>
+        <h1>{{ show.name }}</h1>
+        <p class="muted">
+            {{ show.status }}
+            {% if show.original_name and show.original_name != show.name %} · {{ show.original_name }}{% endif %}
+            {% if show.premiered %} · desde {{ show.premiered[:4] }}{% endif %}
+            {% if show.network %} · {{ show.network }}{% endif %}
+        </p>
+        {% if show.genres %}
+            <p class="tags">{{ show.genres | join(" · ") }}</p>
+        {% endif %}
+        <p>{{ show.summary or "Sin sinopsis disponible." }}</p>
+        <div class="detail-actions">
+            <form action="{{ url_for('refresh_show', show_id=show.id) }}" method="post">
+                <button class="button button-secondary" type="submit">Actualizar</button>
+            </form>
+            <form action="{{ url_for('watch_aired', show_id=show.id) }}" method="post">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                <button class="button button-secondary" type="submit">Marcar emitidos</button>
+            </form>
+            <form action="{{ url_for('clear_show_progress', show_id=show.id) }}" method="post">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                <button class="button button-secondary" type="submit">Reiniciar progreso</button>
+            </form>
+            <form action="{{ url_for('remove_show', show_id=show.id) }}" method="post">
+                <button class="button button-danger" type="submit">Quitar</button>
+            </form>
+        </div>
+    </div>
+</section>
+
+{% if cast %}
+    <section class="cast-section">
+        <div class="section-heading">
+            <div>
+                <h2>Reparto</h2>
+                <p class="muted">Actores principales según TMDb.</p>
+            </div>
+        </div>
+        <div class="cast-list" aria-label="Reparto de {{ show.name }}">
+            {% for actor in cast %}
+                <a class="cast-card" href="{{ url_for('actor_detail', person_id=actor.id) }}">
+                    <span class="cast-photo">
+                        {% if actor.image_url %}
+                            <img src="{{ actor.image_url }}" alt="Foto de {{ actor.name }}" loading="lazy">
+                        {% else %}
+                            <span class="poster-fallback">{{ actor.name[:1] }}</span>
+                        {% endif %}
+                    </span>
+                    <span>
+                        <strong>{{ actor.name }}</strong>
+                        {% if actor.character %}
+                            <small>{{ actor.character }}</small>
+                        {% endif %}
+                    </span>
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+
+<section class="metrics-grid" aria-label="Progreso de {{ show.name }}">
+    <div class="metric">
+        <span>Progreso</span>
+        <strong>{{ show.progress }}%</strong>
+    </div>
+    <div class="metric">
+        <span>Vistos</span>
+        <strong>{{ show.watched_count }}</strong>
+    </div>
+    <div class="metric">
+        <span>Emitidos</span>
+        <strong>{{ show.aired_count }}</strong>
+    </div>
+    <div class="metric">
+        <span>Total</span>
+        <strong>{{ show.episode_count }}</strong>
+    </div>
+</section>
+
+<section class="section-heading episode-heading">
+    <div>
+        <h2>Episodios</h2>
+        {% if show.next_unwatched %}
+            <p class="muted">Siguiente pendiente: {{ show.next_unwatched|episode_code }} · {{ show.next_unwatched.name }}</p>
+        {% elif show.completed %}
+            <p class="muted">Todo lo emitido está visto.</p>
+        {% endif %}
+    </div>
+    {% if show_watched %}
+        <a class="button button-secondary" href="{{ url_for('show_detail', show_id=show.id) }}">Ocultar vistos</a>
+    {% else %}
+        <a class="button button-secondary" href="{{ url_for('show_detail', show_id=show.id, vistos=1) }}">Mostrar vistos</a>
+    {% endif %}
+</section>
+
+{% if not show.episodes %}
+    <section class="empty-state small">
+        <h2>No hay episodios disponibles</h2>
+        <p>Prueba a actualizar la serie más tarde.</p>
+    </section>
+{% elif not visible_episode_count %}
+    <section class="empty-state small">
+        <h2>No hay episodios pendientes</h2>
+        <p>Los capítulos vistos están ocultos por defecto. Puedes mostrarlos desde el botón superior.</p>
+    </section>
+{% endif %}
+
+{% for season, episodes in episode_groups %}
+    <section class="season-block">
+        <h3>{{ season }}</h3>
+        <div class="episode-list">
+            {% for episode in episodes %}
+                <article class="episode-row {% if episode.watched %}is-watched{% endif %}">
+                    <button
+                        class="episode-main episode-open"
+                        type="button"
+                        data-episode='{{ episode|episode_modal_payload|tojson }}'
+                        data-detail-url="{{ url_for('episode_detail', show_id=show.id, episode_id=episode.id) }}"
+                    >
+                        <span class="episode-code">{{ episode|episode_code }}</span>
+                        <div>
+                            <h4>{{ episode.name }}</h4>
+                            <p class="muted">{{ episode|format_air_datetime }}</p>
+                        </div>
+                    </button>
+                    <div class="episode-actions">
+                        {% if episode.aired and not episode.watched %}
+                            <form action="{{ url_for('watch_through', show_id=show.id, episode_id=episode.id) }}" method="post">
+                                <input type="hidden" name="next" value="{{ request.full_path }}">
+                                <button class="button button-secondary" type="submit">Hasta aquí</button>
+                            </form>
+                        {% endif %}
+                        <form action="{{ url_for('set_episode_watched', episode_id=episode.id) }}" method="post">
+                            <input type="hidden" name="show_id" value="{{ show.id }}">
+                            <input type="hidden" name="season" value="{{ episode.season or '' }}">
+                            <input type="hidden" name="number" value="{{ episode.number or '' }}">
+                            <input type="hidden" name="name" value="{{ episode.name }}">
+                            <input type="hidden" name="next" value="{{ request.full_path }}">
+                            {% if episode.watched %}
+                                <input type="hidden" name="watched" value="0">
+                                <button class="button button-secondary" type="submit">Visto</button>
+                            {% elif episode.aired %}
+                                <input type="hidden" name="watched" value="1">
+                                <button class="button button-primary" type="submit">Marcar visto</button>
+                            {% else %}
+                                <button class="button button-disabled" type="button" disabled>Próximo</button>
+                            {% endif %}
+                        </form>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+{% endfor %}
+
+<dialog class="episode-dialog" id="episode-dialog" aria-labelledby="episode-dialog-title">
+    <form method="dialog" class="dialog-close-form">
+        <button class="dialog-close" type="submit" aria-label="Cerrar">Cerrar</button>
+    </form>
+    <img class="dialog-image" id="episode-dialog-image" alt="">
+    <div class="dialog-body">
+        <span class="status-pill" id="episode-dialog-status"></span>
+        <p class="eyebrow" id="episode-dialog-code"></p>
+        <h2 id="episode-dialog-title"></h2>
+        <p class="muted" id="episode-dialog-meta"></p>
+        <p id="episode-dialog-summary"></p>
+    </div>
+</dialog>
+{% endblock %}
