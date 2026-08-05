@@ -23,7 +23,7 @@
         {% endif %}
         <div class="detail-actions">
             <a class="button button-primary" href="{{ url_for('manga_recommendations', autor=author.name, autor_id=author.id) }}">Ver recomendaciones</a>
-            <a class="button button-secondary" href="{{ author.official_url }}" target="_blank" rel="noreferrer">Abrir en AniList</a>
+            <a class="button button-secondary" href="{{ author.official_url }}" target="_blank" rel="noreferrer">Abrir en {{ author_source_label }}</a>
         </div>
     </div>
 </section>
@@ -31,7 +31,7 @@
 <section class="section-heading">
     <div>
         <h2>Mangas relacionados</h2>
-        <p class="muted">Ordenados por valoracion en AniList.</p>
+        <p class="muted">Ordenados por relevancia en {{ author_source_label }}.</p>
     </div>
 </section>
 
@@ -73,7 +73,7 @@
 {% else %}
     <section class="empty-state small">
         <h2>No hay mangas disponibles</h2>
-        <p>AniList no ha devuelto mangas para este autor.</p>
+        <p>{{ author_source_label }} no ha devuelto mangas para este autor.</p>
     </section>
 {% endif %}
 {% endblock %}
