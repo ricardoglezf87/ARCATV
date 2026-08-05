@@ -130,6 +130,23 @@ class MangaDexClient:
     def get_author(self, author_id):
         return self._get(f"/author/{author_id}").get("data") or {}
 
+    def get_author_manga(self, author_id, relationship="author", limit=48):
+        relationship_filter = "artists[]" if relationship == "artist" else "authors[]"
+        return self._get(
+            "/manga",
+            [
+                ("limit", limit),
+                (relationship_filter, author_id),
+                ("contentRating[]", "safe"),
+                ("contentRating[]", "suggestive"),
+                ("contentRating[]", "erotica"),
+                ("includes[]", "cover_art"),
+                ("includes[]", "author"),
+                ("includes[]", "artist"),
+                ("order[followedCount]", "desc"),
+            ],
+        ).get("data", [])
+
     def get_manga_feed(self, manga_id, languages=None, offset=0, limit=100):
         params = [
             ("limit", limit),
@@ -228,13 +245,14 @@ def normalize_mangadex_manga(item):
 def normalize_mangadex_author(relationship):
     attributes = relationship.get("attributes") or {}
     name = attributes.get("name") or "Sin nombre"
+    biography = first_localized_value(attributes.get("biography"))
     return {
         "id": relationship["id"],
         "name": name,
         "native_name": None,
         "role": "Autor" if relationship.get("type") == "author" else "Arte",
-        "biography": "",
-        "image_url": None,
+        "biography": clean_anilist_text(biography),
+        "image_url": attributes.get("imageUrl"),
         "official_url": f"https://mangadex.org/author/{relationship['id']}",
     }
 

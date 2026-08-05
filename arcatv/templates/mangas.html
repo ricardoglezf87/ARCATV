@@ -8,6 +8,10 @@
         <h1>Mis mangas</h1>
     </div>
     <div class="header-actions">
+        <form action="{{ url_for('cleanup_all_read_manga_downloads') }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <button class="button button-secondary" type="submit">Borrar imagenes leidas</button>
+        </form>
         <form action="{{ url_for('refresh_mangas_library') }}" method="post">
             <input type="hidden" name="next" value="{{ request.full_path }}">
             <button class="button button-secondary" type="submit">Actualizar</button>
@@ -78,34 +82,33 @@
                         <h2><a href="{{ url_for('manga_detail', manga_id=manga.id) }}">{{ manga.name }}</a></h2>
                         <span class="status-pill">{{ "Leido" if manga.read else "En progreso" if manga.in_progress else "Pendiente" }}</span>
                     </div>
-                    <p class="muted">
-                        {% if manga.premiered %}{{ manga.premiered[:4] }}{% else %}Sin fecha{% endif %}
-                        {% if manga.network %} - {{ manga.network }}{% endif %}
-                        {% if manga.latest_chapter %} - ultimo cap. {{ manga.latest_chapter }}{% elif manga.chapters %} - {{ manga.chapters }} caps.{% endif %}
-                        {% if manga.chapter_read or manga.volumes %} - {{ manga.progress_label }}{% endif %}
-                    </p>
-                    {% if manga.genres %}
-                        <p class="tags">{{ manga.genres | join(" - ") }}</p>
+                    {% if manga.available_chapter_count %}
+                        <p class="muted">{{ manga.read_chapter_count }} de {{ manga.available_chapter_count }} capitulos leidos</p>
+                    {% elif manga.volumes %}
+                        <p class="muted">{{ manga.volumes_read }} de {{ manga.volumes }} tomos leidos</p>
+                    {% else %}
+                        <p class="muted">{{ manga.progress_label }}</p>
                     {% endif %}
-                    <div class="recommendation-actions">
-                        <a class="button button-secondary" href="{{ url_for('manga_detail', manga_id=manga.id) }}">Abrir</a>
-                        <form action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
-                            <input type="hidden" name="next" value="{{ request.full_path }}">
-                            {% if manga.next_chapter %}
-                                <input type="hidden" name="chapter_read" value="{{ manga.next_chapter.chapter }}">
-                                <button class="button button-primary" type="submit">Sumar capitulo</button>
-                            {% elif manga.volumes and not manga.read %}
-                                <input type="hidden" name="volumes_read" value="{{ manga.next_volume_count }}">
-                                <button class="button button-primary" type="submit">Sumar tomo</button>
-                            {% elif manga.read %}
-                                <input type="hidden" name="read" value="0">
-                                <button class="button button-secondary" type="submit">Reiniciar</button>
-                            {% else %}
-                                <input type="hidden" name="read" value="1">
-                                <button class="button button-primary" type="submit">Marcar leido</button>
-                            {% endif %}
-                        </form>
+                    <div class="progress" aria-label="{{ manga.progress }}% leido">
+                        <span style="width: {{ manga.progress }}%"></span>
                     </div>
+                    {% if manga.next_chapter %}
+                        <p class="next-line">
+                            Pendiente: <strong>Cap. {{ manga.next_chapter.chapter }}</strong>
+                        </p>
+                    {% elif manga.read %}
+                        <p class="next-line">Todo lo disponible esta leido.</p>
+                    {% elif manga.volumes %}
+                        <p class="next-line">Pendiente: <strong>Tomo {{ manga.next_volume_count }}</strong></p>
+                    {% else %}
+                        <p class="next-line">Pendiente de empezar.</p>
+                    {% endif %}
+                    {% if manga.network or manga.premiered %}
+                        <p class="air-line">
+                            {% if manga.premiered %}{{ manga.premiered[:4] }}{% else %}Sin fecha{% endif %}
+                            {% if manga.network %} - {{ manga.network }}{% endif %}
+                        </p>
+                    {% endif %}
                 </div>
             </article>
         {% endfor %}

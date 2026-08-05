@@ -2,4 +2,10 @@ Flask==3.0.3
 requests==2.32.3
 urllib3==2.5.0
 truststore==0.10.4
+beautifulsoup4==4.12.3
+numpy==2.5.1
+opencv-python==4.14.0.94
+Pillow==12.3.0
+setuptools==83.0.0
+undetected-chromedriver==3.5.5
 pytest==8.3.2

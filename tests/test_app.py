@@ -1,8 +1,14 @@
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
+from arcatv import db as store
+from arcatv import manga_downloads
 from arcatv import build_recommendation_sections, create_app
-from arcatv.anilist import synthetic_anilist_manga_id
+from arcatv.anilist import normalize_anilist_manga, synthetic_anilist_manga_id
 from arcatv.comick import synthetic_comick_manga_id
+from arcatv.mangadex import synthetic_mangadex_manga_id
 from arcatv.recommendations import add_recommendation_reasons, rank_recommendations
 from arcatv.tmdb import (
     TMDbClient,
@@ -178,6 +184,7 @@ def anilist_manga(manga_id, title, score=82, year=2024, genres=None):
 ANILIST_MANGA = anilist_manga(30002, "Manga Base", 84, 2024)
 ANILIST_MANGA_RECOMMENDATION = anilist_manga(30003, "Manga Recomendado", 88, 2026)
 ANILIST_AUTHOR_MANGA = anilist_manga(30004, "Manga del Autor", 87, 2025)
+ANILIST_DUPLICATE_MANGA = anilist_manga(87178, "Manga Base", 90, 1997)
 ANILIST_STAFF = {
     "id": 900,
     "name": {"full": "Autor Demo", "native": "Autor Demo"},
@@ -420,6 +427,7 @@ class FakeAniListClient:
         30002: ANILIST_MANGA,
         30003: ANILIST_MANGA_RECOMMENDATION,
         30004: ANILIST_AUTHOR_MANGA,
+        87178: ANILIST_DUPLICATE_MANGA,
     }
 
     def search_manga(self, query):
@@ -460,8 +468,8 @@ class FakeAniListClient:
         return {
             **ANILIST_STAFF,
             "staffMedia": {
-                "nodes": [ANILIST_AUTHOR_MANGA, ANILIST_MANGA],
-                "edges": [{"staffRole": "Story"}, {"staffRole": "Story & Art"}],
+                "nodes": [ANILIST_AUTHOR_MANGA, ANILIST_MANGA, ANILIST_DUPLICATE_MANGA],
+                "edges": [{"staffRole": "Story"}, {"staffRole": "Story & Art"}, {"staffRole": "Story & Art"}],
             },
         }
 
@@ -470,6 +478,7 @@ class FakeAniListClient:
         return [
             {**ANILIST_AUTHOR_MANGA, "staff_role": "Story"},
             {**ANILIST_MANGA, "staff_role": "Story & Art"},
+            {**ANILIST_DUPLICATE_MANGA, "staff_role": "Story & Art"},
         ]
 
 
@@ -489,8 +498,12 @@ class FakeMangaDexClient:
         return {
             "id": MANGADEX_AUTHOR_ID,
             "type": "author",
-            "attributes": {"name": "Autor Demo"},
+            "attributes": {"name": "Autor Demo", "biography": {"en": "Bio de MangaDex."}},
         }
+
+    def get_author_manga(self, author_id, relationship="author"):
+        assert author_id == MANGADEX_AUTHOR_ID
+        return [MANGADEX_MANGA] if relationship == "author" else []
 
     def get_manga_feed(self, manga_id, languages=None, offset=0, limit=100):
         assert manga_id == MANGADEX_MANGA_ID
@@ -579,6 +592,7 @@ def app(tmp_path):
         {
             "TESTING": True,
             "DATABASE": str(tmp_path / "arcatv-test.sqlite"),
+            "MANGA_DOWNLOAD_ROOT": str(tmp_path / "manga-downloads"),
             "TMDB_CLIENT": FakeTMDbClient(),
             "ANILIST_CLIENT": FakeAniListClient(),
             "COMICK_CLIENT": FakeComicKClient(),
@@ -802,17 +816,37 @@ def test_manga_search_add_chapter_progress_authors_and_recommendations(client):
         data={"chapter_read": "1035"},
         follow_redirects=True,
     ).get_data(as_text=True)
-    assert "Cap. 1035" in html
     assert "Cap. 1036" in html
     assert "Sin titulo disponible" in html
-    assert "En progreso" in html
+    assert "99%" in html
+    assert "Abrir en ComicK" not in html
     assert "Capitulo base" not in client.get(f"/mangas/{manga_id}").get_data(as_text=True)
-    assert "Capitulo base" in client.get(f"/mangas/{manga_id}?leidos=1").get_data(as_text=True)
+    read_chapters_html = client.get(f"/mangas/{manga_id}?leidos=1").get_data(as_text=True)
+    assert "Capitulo base" in read_chapters_html
+    assert "Cap. N/D" not in read_chapters_html
+    assert "Visto" in read_chapters_html
+    assert 'name="chapter_read" value="1034"' in read_chapters_html
+
+    client.post(
+        f"/mangas/{manga_id}/leido",
+        data={"chapter_read": "1034"},
+        follow_redirects=True,
+    )
+    assert "Capitulo base" in client.get(f"/mangas/{manga_id}").get_data(as_text=True)
+
+    client.post(
+        f"/mangas/{manga_id}/leido",
+        data={"chapter_read": "1035"},
+        follow_redirects=True,
+    )
 
     default_mangas_html = client.get("/mangas").get_data(as_text=True)
     assert "Manga Base" in default_mangas_html
-    assert "Cap. 1035" in default_mangas_html
+    assert "1035 de 1037 capitulos leidos" in default_mangas_html
+    assert "Pendiente:" in default_mangas_html
+    assert "Cap. 1036" in default_mangas_html
     assert 'action="/mangas/actualizar"' in default_mangas_html
+    assert "Sumar capitulo" not in default_mangas_html
 
     refreshed_html = client.post("/mangas/actualizar", follow_redirects=True).get_data(as_text=True)
     assert "Se actualizaron 1 mangas y sus capitulos." in refreshed_html
@@ -835,12 +869,142 @@ def test_manga_search_add_chapter_progress_authors_and_recommendations(client):
     assert f'name="origen"' in recommendations_html
 
 
+def test_manga_chapter_download_reader_progress_and_cleanup(client, app, monkeypatch):
+    manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=True,
+    )
+    client.post(
+        f"/mangas/{manga_id}/descarga-base",
+        data={"base_url": "https://mangasnosekai.com/manga/una-pieza"},
+        follow_redirects=True,
+    )
+
+    downloaded_urls = []
+
+    def fake_download(url, chapter_dir, chrome_version=None):
+        downloaded_urls.append(url)
+        chapter_dir = Path(chapter_dir)
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        pages_dir = chapter_dir / "paginas_completas"
+        pages_dir.mkdir()
+        (chapter_dir / "001.jpg").write_bytes(b"panel-1")
+        (chapter_dir / "002.jpg").write_bytes(b"panel-2")
+        (pages_dir / "page_01.jpg").write_bytes(b"page-1")
+        (chapter_dir / "config.json").write_text('{"1": "page_01.jpg", "2": "page_01.jpg"}')
+        return SimpleNamespace(panel_count=2, page_count=1, strategy="prueba")
+
+    monkeypatch.setattr("arcatv.download_manga_chapter", fake_download)
+
+    html = client.post(
+        f"/mangas/{manga_id}/capitulos/descargar",
+        data={
+            "chapter": "1035",
+        },
+        follow_redirects=True,
+    ).get_data(as_text=True)
+
+    assert downloaded_urls == ["https://mangasnosekai.com/manga/una-pieza/capitulo-1035/"]
+    assert "Descargado: 2 imagenes" in html
+    assert f'href="/mangas/{manga_id}/capitulos/1035/leer"' in html
+
+    reader_html = client.get(f"/mangas/{manga_id}/capitulos/1035/leer").get_data(as_text=True)
+    assert "Cap. 1035" in reader_html
+    assert f"/mangas/{manga_id}/capitulos/1035/imagenes/001.jpg" in reader_html
+
+    client.post(f"/mangas/{manga_id}/capitulos/1035/progreso", json={"panel": 2})
+    reader_html = client.get(f"/mangas/{manga_id}/capitulos/1035/leer").get_data(as_text=True)
+    assert "Math.max(2 - 1, 0)" in reader_html
+
+    response = client.post(f"/mangas/{manga_id}/capitulos/1035/terminar", json={"panel": 2})
+    assert response.json["ok"] is True
+
+    assert "Capitulo base" not in client.get(f"/mangas/{manga_id}").get_data(as_text=True)
+    assert "Capitulo base" in client.get(f"/mangas/{manga_id}?leidos=1").get_data(as_text=True)
+
+    download_folder = Path(app.config["MANGA_DOWNLOAD_ROOT"]) / str(manga_id) / "1035"
+    assert download_folder.exists()
+    client.post("/mangas/imagenes-vistas/borrar", data={"next": f"/mangas/{manga_id}"})
+    assert not download_folder.exists()
+
+
+def test_anilist_duplicate_manga_reuses_saved_comick_entry(client, app):
+    existing_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    duplicate_id = synthetic_anilist_manga_id(87178)
+
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=True,
+    )
+
+    author_html = client.get("/autores/900").get_data(as_text=True)
+    assert f'href="/mangas/{existing_id}"' in author_html
+    assert f'action="/mangas/{duplicate_id}/add"' not in author_html
+
+    response = client.post(f"/mangas/{duplicate_id}/add", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/mangas/{existing_id}")
+
+    with app.app_context():
+        store.upsert_manga(normalize_anilist_manga(ANILIST_DUPLICATE_MANGA))
+
+    response = client.get(f"/mangas/{duplicate_id}", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/mangas/{existing_id}")
+
+    with app.app_context():
+        assert store.get_manga(duplicate_id) is None
+
+
+def test_manga_downloader_retries_with_browser_major_version():
+    class FakeOptions:
+        def set_capability(self, name, value):
+            pass
+
+    class FakeUc:
+        calls = []
+        ChromeOptions = FakeOptions
+
+        @classmethod
+        def Chrome(cls, **kwargs):
+            version = kwargs.get("version_main")
+            cls.calls.append(version)
+            if version != 150:
+                raise RuntimeError("session not created: Current browser version is 150.0.7871.187")
+            return "driver"
+
+    driver = manga_downloads._new_driver(FakeUc, chrome_version="151.0.0")
+
+    assert driver == "driver"
+    assert FakeUc.calls == [151, 150]
+    assert manga_downloads._coerce_chrome_major_version("150.0.7871.187") == 150
+    assert manga_downloads._chrome_version_from_error(
+        RuntimeError("Current browser version is 150.0.7871.187")
+    ) == 150
+
+
 def test_manga_author_page_and_manual_author_recommendations(client):
     author_html = client.get("/autores/900").get_data(as_text=True)
 
     assert "Biografia de autor" in author_html
     assert "Manga del Autor" in author_html
     assert f'action="/mangas/{synthetic_anilist_manga_id(30004)}/add"' in author_html
+
+    client.post(
+        "/mangas/add",
+        data={"source": "mangadex", "source_id": MANGADEX_MANGA_ID},
+        follow_redirects=True,
+    )
+    mangadex_author_html = client.get(f"/autores/{MANGADEX_AUTHOR_ID}").get_data(as_text=True)
+    assert "Bio de MangaDex." in mangadex_author_html
+    assert "Manga Base" in mangadex_author_html
+    assert "Autor" in mangadex_author_html
+    assert "1997" in mangadex_author_html
+    assert "Abrir en MangaDex" in mangadex_author_html
+    assert f'href="/mangas/{synthetic_mangadex_manga_id(MANGADEX_MANGA_ID)}"' in mangadex_author_html
 
     recommendations_html = client.get("/recomendaciones/mangas?autor=Autor+Demo").get_data(as_text=True)
     assert "Con Autor Demo" in recommendations_html

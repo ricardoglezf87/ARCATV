@@ -549,13 +549,18 @@ select {
 }
 
 .progress-form input[type="number"],
-.progress-form input[type="text"] {
+.progress-form input[type="text"],
+.progress-form input[type="url"] {
     width: 90px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface);
     color: var(--ink);
     padding: 9px 11px;
+}
+
+.download-base-form input[type="url"] {
+    width: min(420px, 100%);
 }
 
 .episode-heading {
@@ -572,8 +577,8 @@ select {
 
 .episode-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 360px);
+    gap: 16px;
     align-items: center;
     padding: 16px;
     box-shadow: none;
@@ -618,7 +623,32 @@ select {
 }
 
 .episode-actions {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
     gap: 8px;
+    justify-content: flex-end;
+}
+
+.episode-actions form {
+    min-width: 0;
+}
+
+.chapter-download-form {
+    display: flex;
+    min-width: 0;
+    gap: 8px;
+    align-items: center;
+}
+
+.chapter-download-form input[type="url"] {
+    width: min(230px, 100%);
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 9px 11px;
 }
 
 .calendar-row {
@@ -1134,6 +1164,7 @@ select {
     }
 
     .episode-actions,
+    .chapter-download-form,
     .header-actions,
     .detail-actions,
     .progress-form,
@@ -1143,10 +1174,13 @@ select {
     }
 
     .episode-actions .button,
+    .chapter-download-form input[type="url"],
+    .chapter-download-form .button,
     .header-actions .button,
     .detail-actions .button,
     .progress-form input[type="number"],
     .progress-form input[type="text"],
+    .progress-form input[type="url"],
     .progress-form .button,
     .result-title .button {
         width: 100%;
