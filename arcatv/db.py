@@ -104,6 +104,35 @@ CREATE TABLE IF NOT EXISTS read_mangas (
     FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS manga_chapter_downloads (
+    manga_id INTEGER NOT NULL,
+    chapter_key TEXT NOT NULL,
+    source_url TEXT,
+    folder_name TEXT NOT NULL,
+    panel_count INTEGER NOT NULL DEFAULT 0,
+    page_count INTEGER NOT NULL DEFAULT 0,
+    downloaded_at TEXT NOT NULL,
+    PRIMARY KEY(manga_id, chapter_key),
+    FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS manga_reader_progress (
+    manga_id INTEGER NOT NULL,
+    chapter_key TEXT NOT NULL,
+    current_panel INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    PRIMARY KEY(manga_id, chapter_key),
+    FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS manga_download_preferences (
+    manga_id INTEGER PRIMARY KEY,
+    base_url TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS rejected_manga_recommendations (
     manga_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -224,6 +253,28 @@ def row_to_manga(row):
     }
 
 
+def row_to_manga_download(row):
+    return {
+        "manga_id": row["manga_id"],
+        "chapter_key": row["chapter_key"],
+        "source_url": row["source_url"],
+        "folder_name": row["folder_name"],
+        "panel_count": row["panel_count"] or 0,
+        "page_count": row["page_count"] or 0,
+        "downloaded_at": row["downloaded_at"],
+    }
+
+
+def row_to_manga_reader_progress(row):
+    return {
+        "manga_id": row["manga_id"],
+        "chapter_key": row["chapter_key"],
+        "current_panel": row["current_panel"] or 1,
+        "updated_at": row["updated_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
 def list_shows():
     rows = get_db().execute("SELECT * FROM shows ORDER BY name COLLATE NOCASE").fetchall()
     return [row_to_show(row) for row in rows]
@@ -282,6 +333,17 @@ def get_movie(movie_id):
 def get_manga(manga_id):
     row = get_db().execute("SELECT * FROM mangas WHERE id = ?", (manga_id,)).fetchone()
     return row_to_manga(row) if row else None
+
+
+def manga_has_user_state(manga_id):
+    db = get_db()
+    checks = (
+        "SELECT 1 FROM read_mangas WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_reader_progress WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_chapter_downloads WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_download_preferences WHERE manga_id = ? LIMIT 1",
+    )
+    return any(db.execute(query, (manga_id,)).fetchone() for query in checks)
 
 
 def get_manga_by_mangadex_id(mangadex_id):
@@ -440,6 +502,9 @@ def remove_movie(movie_id):
 def remove_manga(manga_id):
     db = get_db()
     db.execute("DELETE FROM read_mangas WHERE manga_id = ?", (manga_id,))
+    db.execute("DELETE FROM manga_reader_progress WHERE manga_id = ?", (manga_id,))
+    db.execute("DELETE FROM manga_chapter_downloads WHERE manga_id = ?", (manga_id,))
+    db.execute("DELETE FROM manga_download_preferences WHERE manga_id = ?", (manga_id,))
     db.execute("DELETE FROM mangas WHERE id = ?", (manga_id,))
     db.commit()
 
@@ -484,6 +549,131 @@ def get_manga_progress(manga_id):
 
 def get_manga_read_at(manga_id):
     return get_manga_progress(manga_id)["read_at"]
+
+
+def get_manga_download_base_url(manga_id):
+    row = get_db().execute(
+        "SELECT base_url FROM manga_download_preferences WHERE manga_id = ?",
+        (manga_id,),
+    ).fetchone()
+    return row["base_url"] if row and row["base_url"] else None
+
+
+def set_manga_download_base_url(manga_id, base_url):
+    base_url = (base_url or "").strip().rstrip("/")
+    db = get_db()
+    if not base_url:
+        db.execute("DELETE FROM manga_download_preferences WHERE manga_id = ?", (manga_id,))
+    else:
+        db.execute(
+            """
+            INSERT INTO manga_download_preferences (manga_id, base_url, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(manga_id) DO UPDATE SET
+                base_url = excluded.base_url,
+                updated_at = excluded.updated_at
+            """,
+            (manga_id, base_url, now_iso()),
+        )
+    db.commit()
+
+
+def get_manga_download(manga_id, chapter_key):
+    row = get_db().execute(
+        """
+        SELECT * FROM manga_chapter_downloads
+        WHERE manga_id = ? AND chapter_key = ?
+        """,
+        (manga_id, str(chapter_key)),
+    ).fetchone()
+    return row_to_manga_download(row) if row else None
+
+
+def list_manga_downloads(manga_id=None):
+    if manga_id is None:
+        rows = get_db().execute(
+            "SELECT * FROM manga_chapter_downloads ORDER BY manga_id, chapter_key"
+        ).fetchall()
+    else:
+        rows = get_db().execute(
+            """
+            SELECT * FROM manga_chapter_downloads
+            WHERE manga_id = ?
+            ORDER BY chapter_key
+            """,
+            (manga_id,),
+        ).fetchall()
+    return [row_to_manga_download(row) for row in rows]
+
+
+def upsert_manga_download(manga_id, chapter_key, source_url, folder_name, panel_count, page_count):
+    get_db().execute(
+        """
+        INSERT INTO manga_chapter_downloads (
+            manga_id, chapter_key, source_url, folder_name, panel_count, page_count, downloaded_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(manga_id, chapter_key) DO UPDATE SET
+            source_url = excluded.source_url,
+            folder_name = excluded.folder_name,
+            panel_count = excluded.panel_count,
+            page_count = excluded.page_count,
+            downloaded_at = excluded.downloaded_at
+        """,
+        (
+            manga_id,
+            str(chapter_key),
+            source_url,
+            folder_name,
+            int(panel_count or 0),
+            int(page_count or 0),
+            now_iso(),
+        ),
+    )
+    get_db().commit()
+
+
+def delete_manga_download(manga_id, chapter_key):
+    db = get_db()
+    db.execute(
+        "DELETE FROM manga_reader_progress WHERE manga_id = ? AND chapter_key = ?",
+        (manga_id, str(chapter_key)),
+    )
+    db.execute(
+        "DELETE FROM manga_chapter_downloads WHERE manga_id = ? AND chapter_key = ?",
+        (manga_id, str(chapter_key)),
+    )
+    db.commit()
+
+
+def get_manga_reader_progress(manga_id, chapter_key):
+    row = get_db().execute(
+        """
+        SELECT * FROM manga_reader_progress
+        WHERE manga_id = ? AND chapter_key = ?
+        """,
+        (manga_id, str(chapter_key)),
+    ).fetchone()
+    return row_to_manga_reader_progress(row) if row else None
+
+
+def save_manga_reader_progress(manga_id, chapter_key, current_panel, finished=False):
+    current_panel = max(1, int(current_panel or 1))
+    finished_at = now_iso() if finished else None
+    get_db().execute(
+        """
+        INSERT INTO manga_reader_progress (
+            manga_id, chapter_key, current_panel, updated_at, finished_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(manga_id, chapter_key) DO UPDATE SET
+            current_panel = excluded.current_panel,
+            updated_at = excluded.updated_at,
+            finished_at = COALESCE(excluded.finished_at, manga_reader_progress.finished_at)
+        """,
+        (manga_id, str(chapter_key), current_panel, now_iso(), finished_at),
+    )
+    get_db().commit()
 
 
 def mark_episode(episode):
