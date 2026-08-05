@@ -600,6 +600,12 @@ def register_routes(app):
         if not manga:
             abort(404)
 
+        existing_manga = find_saved_duplicate_manga(manga)
+        if existing_manga:
+            store.restore_manga_recommendation(existing_manga["id"])
+            flash(f"{existing_manga['name']} ya estaba en tus mangas.", "success")
+            return redirect(url_for("manga_detail", manga_id=existing_manga["id"]))
+
         store.upsert_manga(manga)
         store.restore_manga_recommendation(manga["id"])
         flash(f"{manga['name']} se anadio a tus mangas.", "success")
@@ -612,6 +618,8 @@ def register_routes(app):
             abort(404)
 
         manga = ensure_comick_link_for_manga(manga)
+        if manga["id"] != manga_id:
+            return redirect(url_for("manga_detail", manga_id=manga["id"]))
 
         if manga.get("comick_id"):
             try:
@@ -1478,7 +1486,12 @@ def register_routes(app):
 
         saved_manga_ids = store.get_manga_ids()
         for manga in manga_credits:
-            manga["is_saved"] = manga["id"] in saved_manga_ids
+            existing_manga = find_saved_duplicate_manga(manga)
+            if existing_manga:
+                manga["id"] = existing_manga["id"]
+                manga["is_saved"] = True
+            else:
+                manga["is_saved"] = manga["id"] in saved_manga_ids
 
         return render_template(
             "author.html",
@@ -2615,13 +2628,54 @@ def refresh_manga_from_source(manga):
     return store.get_manga(manga["id"]) or merged
 
 
+def find_saved_duplicate_manga(manga):
+    if not manga:
+        return None
+
+    direct_match = store.get_manga(manga["id"])
+    if direct_match:
+        return direct_match
+
+    for key, getter in (
+        ("comick_id", store.get_manga_by_comick_id),
+        ("mangadex_id", store.get_manga_by_mangadex_id),
+    ):
+        external_id = manga.get(key)
+        if not external_id:
+            continue
+        existing_manga = getter(external_id)
+        if existing_manga and existing_manga["id"] != manga["id"]:
+            return existing_manga
+
+    if not manga.get("comick_id") and is_comick_enabled():
+        comick_id = find_comick_id_for_manga(manga, allow_fallback=False)
+        if comick_id:
+            existing_manga = store.get_manga_by_comick_id(comick_id)
+            if existing_manga and existing_manga["id"] != manga["id"]:
+                return existing_manga
+
+    return None
+
+
 def ensure_comick_link_for_manga(manga):
     if not manga or manga.get("comick_id") or not is_comick_enabled():
         return manga
 
-    comick_id = find_comick_id_for_manga(manga)
+    comick_id = find_comick_id_for_manga(manga, allow_fallback=False)
     if not comick_id:
         return manga
+
+    existing_manga = store.get_manga_by_comick_id(comick_id)
+    if existing_manga and existing_manga["id"] != manga["id"]:
+        if not store.manga_has_user_state(manga["id"]):
+            store.remove_manga(manga["id"])
+        try:
+            comick_manga = get_comick_manga_for_storage(comick_id, refresh=True)
+        except ComicKError:
+            return store.get_manga(existing_manga["id"]) or existing_manga
+        if comick_manga:
+            store.upsert_manga(merge_manga_storage(existing_manga, comick_manga))
+        return store.get_manga(existing_manga["id"]) or existing_manga
 
     try:
         comick_manga = get_comick_manga_for_storage(comick_id, refresh=True)
@@ -2635,7 +2689,7 @@ def ensure_comick_link_for_manga(manga):
     return store.get_manga(manga["id"]) or merged
 
 
-def find_comick_id_for_manga(manga):
+def find_comick_id_for_manga(manga, allow_fallback=True):
     query = manga.get("original_name") or manga.get("name")
     if not query:
         return None
@@ -2666,7 +2720,7 @@ def find_comick_id_for_manga(manga):
         for candidate in normalized:
             if wanted_year and (candidate.get("premiered") or "")[:4] == wanted_year:
                 return candidate["comick_id"]
-        if normalized:
+        if normalized and allow_fallback:
             return normalized[0]["comick_id"]
     return None
 

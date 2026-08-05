@@ -3,9 +3,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from arcatv import db as store
 from arcatv import manga_downloads
 from arcatv import build_recommendation_sections, create_app
-from arcatv.anilist import synthetic_anilist_manga_id
+from arcatv.anilist import normalize_anilist_manga, synthetic_anilist_manga_id
 from arcatv.comick import synthetic_comick_manga_id
 from arcatv.mangadex import synthetic_mangadex_manga_id
 from arcatv.recommendations import add_recommendation_reasons, rank_recommendations
@@ -183,6 +184,7 @@ def anilist_manga(manga_id, title, score=82, year=2024, genres=None):
 ANILIST_MANGA = anilist_manga(30002, "Manga Base", 84, 2024)
 ANILIST_MANGA_RECOMMENDATION = anilist_manga(30003, "Manga Recomendado", 88, 2026)
 ANILIST_AUTHOR_MANGA = anilist_manga(30004, "Manga del Autor", 87, 2025)
+ANILIST_DUPLICATE_MANGA = anilist_manga(87178, "Manga Base", 90, 1997)
 ANILIST_STAFF = {
     "id": 900,
     "name": {"full": "Autor Demo", "native": "Autor Demo"},
@@ -425,6 +427,7 @@ class FakeAniListClient:
         30002: ANILIST_MANGA,
         30003: ANILIST_MANGA_RECOMMENDATION,
         30004: ANILIST_AUTHOR_MANGA,
+        87178: ANILIST_DUPLICATE_MANGA,
     }
 
     def search_manga(self, query):
@@ -465,8 +468,8 @@ class FakeAniListClient:
         return {
             **ANILIST_STAFF,
             "staffMedia": {
-                "nodes": [ANILIST_AUTHOR_MANGA, ANILIST_MANGA],
-                "edges": [{"staffRole": "Story"}, {"staffRole": "Story & Art"}],
+                "nodes": [ANILIST_AUTHOR_MANGA, ANILIST_MANGA, ANILIST_DUPLICATE_MANGA],
+                "edges": [{"staffRole": "Story"}, {"staffRole": "Story & Art"}, {"staffRole": "Story & Art"}],
             },
         }
 
@@ -475,6 +478,7 @@ class FakeAniListClient:
         return [
             {**ANILIST_AUTHOR_MANGA, "staff_role": "Story"},
             {**ANILIST_MANGA, "staff_role": "Story & Art"},
+            {**ANILIST_DUPLICATE_MANGA, "staff_role": "Story & Art"},
         ]
 
 
@@ -924,6 +928,35 @@ def test_manga_chapter_download_reader_progress_and_cleanup(client, app, monkeyp
     assert download_folder.exists()
     client.post("/mangas/imagenes-vistas/borrar", data={"next": f"/mangas/{manga_id}"})
     assert not download_folder.exists()
+
+
+def test_anilist_duplicate_manga_reuses_saved_comick_entry(client, app):
+    existing_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    duplicate_id = synthetic_anilist_manga_id(87178)
+
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=True,
+    )
+
+    author_html = client.get("/autores/900").get_data(as_text=True)
+    assert f'href="/mangas/{existing_id}"' in author_html
+    assert f'action="/mangas/{duplicate_id}/add"' not in author_html
+
+    response = client.post(f"/mangas/{duplicate_id}/add", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/mangas/{existing_id}")
+
+    with app.app_context():
+        store.upsert_manga(normalize_anilist_manga(ANILIST_DUPLICATE_MANGA))
+
+    response = client.get(f"/mangas/{duplicate_id}", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/mangas/{existing_id}")
+
+    with app.app_context():
+        assert store.get_manga(duplicate_id) is None
 
 
 def test_manga_downloader_retries_with_browser_major_version():

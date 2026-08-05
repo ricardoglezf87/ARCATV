@@ -335,6 +335,17 @@ def get_manga(manga_id):
     return row_to_manga(row) if row else None
 
 
+def manga_has_user_state(manga_id):
+    db = get_db()
+    checks = (
+        "SELECT 1 FROM read_mangas WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_reader_progress WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_chapter_downloads WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_download_preferences WHERE manga_id = ? LIMIT 1",
+    )
+    return any(db.execute(query, (manga_id,)).fetchone() for query in checks)
+
+
 def get_manga_by_mangadex_id(mangadex_id):
     row = get_db().execute("SELECT * FROM mangas WHERE mangadex_id = ?", (mangadex_id,)).fetchone()
     return row_to_manga(row) if row else None
