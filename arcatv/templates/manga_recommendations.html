@@ -77,6 +77,7 @@
         <input id="manga-author-filter" name="autor" type="search" placeholder="Nombre del autor" value="{{ author_query }}">
         {% if selected_author %}
             <input type="hidden" name="autor_id" value="{{ selected_author.id }}">
+            <input type="hidden" name="autor_fuente" value="{{ author_source }}">
             <span class="status-pill">Usando {{ selected_author.name }}</span>
         {% endif %}
         <label class="toggle-option">
@@ -95,7 +96,7 @@
         <p class="muted">Autores encontrados</p>
         <div class="chip-list">
             {% for author in author_search_results %}
-                <a class="button button-secondary" href="{{ url_for('manga_recommendations', autor=author_query, autor_id=author.id, genero=selected_genre, desde=year_from, hasta=year_to, orden=sort_mode, rechazadas='1' if include_rejected else '') }}">{{ author.name }}</a>
+                <a class="button button-secondary" href="{{ url_for('manga_recommendations', autor=author_query, autor_id=author.id, autor_fuente='anilist', genero=selected_genre, desde=year_from, hasta=year_to, orden=sort_mode, rechazadas='1' if include_rejected else '') }}">{{ author.name }}</a>
             {% endfor %}
         </div>
     </section>
@@ -146,6 +147,8 @@
                 {% else %}
                     <form action="{{ url_for('add_manga', manga_id=manga.id) }}" method="post">
                         <input type="hidden" name="next" value="{{ request.full_path }}">
+                        <input type="hidden" name="source" value="{{ manga.source or '' }}">
+                        <input type="hidden" name="source_id" value="{{ manga.mangadex_id or manga.comick_id or manga.anilist_id or '' }}">
                         <button class="button button-primary" type="submit">Anadir</button>
                     </form>
                     <form action="{{ url_for('reject_manga_recommendation', manga_id=manga.id) }}" method="post">

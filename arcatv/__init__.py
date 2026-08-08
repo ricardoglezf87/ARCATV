@@ -44,6 +44,7 @@ from .manga_downloads import (
     download_manga_chapter,
     read_vignette_map,
 )
+from .manga_oni import MangaOniClient, MangaOniError, default_manga_url, normalize_manga_url
 from .recommendations import (
     add_recommendation_reasons,
     rank_recommendations,
@@ -146,6 +147,16 @@ def local_config_bool(name, default=True):
     return value.strip().casefold() not in {"0", "false", "no", "off"}
 
 
+def local_config_int(name, default):
+    value = local_config_value(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
@@ -163,6 +174,7 @@ def create_app(test_config=None):
         COMICK_CACHE_SECONDS=6 * 60 * 60,
         COMICK_CHAPTER_CACHE_SECONDS=30 * 60,
         COMICK_CHAPTER_FETCH_LIMIT=5000,
+        COMICK_CHAPTER_PAGE_SIZE=local_config_int("COMICK_CHAPTER_PAGE_SIZE", 100),
         COMICK_ENABLED=local_config_bool("COMICK_ENABLED", True),
         COMICK_LANGUAGES=["es", "en"],
         MANGADEX_BASE_URL="https://api.mangadex.org",
@@ -173,6 +185,9 @@ def create_app(test_config=None):
         MANGADEX_LANGUAGES=["es", "es-la", "en"],
         MANGA_DOWNLOAD_ROOT=str(Path(app.instance_path) / "manga_downloads"),
         MANGA_BROWSER_VERSION=local_config_value("MANGA_BROWSER_VERSION"),
+        MANGA_ONI_BASE_URL="https://manga-oni.com",
+        MANGA_ONI_CACHE_SECONDS=30 * 60,
+        MANGA_ONI_ENABLED=local_config_bool("MANGA_ONI_ENABLED", True),
         TMDB_API_KEY=local_config_value("TMDB_API_KEY"),
         TMDB_BEARER_TOKEN=local_config_value("TMDB_BEARER_TOKEN"),
         TMDB_BASE_URL="https://api.themoviedb.org/3",
@@ -591,9 +606,19 @@ def register_routes(app):
 
     @app.post("/mangas/<int:manga_id>/add")
     def add_manga(manga_id):
+        source = request.form.get("source", "").strip().casefold()
+        source_id = request.form.get("source_id", "").strip()
         try:
-            manga = get_manga_for_storage(manga_id, refresh=True)
-        except AniListError as exc:
+            if source == "mangadex" and source_id:
+                manga = get_mangadex_manga_for_storage(source_id, refresh=True)
+            elif source == "comick" and source_id:
+                manga = get_comick_manga_for_storage(source_id, refresh=True)
+            elif source == "anilist" and source_id.isdigit():
+                raw_manga = get_anilist_manga_from_anilist_id(int(source_id), refresh=True)
+                manga = normalize_anilist_manga(raw_manga) if raw_manga else None
+            else:
+                manga = get_manga_for_storage(manga_id, refresh=True)
+        except (AniListError, ComicKError, MangaDexError) as exc:
             flash(f"No se pudo anadir el manga: {exc}", "error")
             return redirect_to_next(url_for("manga_search", q=request.form.get("q", "")))
 
@@ -639,8 +664,11 @@ def register_routes(app):
                 manga = store.get_manga(manga_id) or manga
 
         state = build_manga_state(manga, store.get_manga_progress(manga_id))
-        chapters = numbered_manga_chapters(get_manga_chapters(manga_id))
+        chapters, chapter_error = preferred_manga_chapters(manga_id, manga)
+        if chapter_error:
+            flash(f"No se pudieron cargar los capitulos ahora: {chapter_error}", "warning")
         download_base_url = manga_download_base_url(manga)
+        source_manga_oni_url = manga_oni_url(manga)
         chapters = attach_manga_downloads_to_chapters(manga_id, chapters, download_base_url)
         state = enrich_manga_state_with_chapters(state, chapters)
         show_read_chapters = request.args.get("leidos") == "1"
@@ -659,6 +687,8 @@ def register_routes(app):
             downloaded_chapter_count=sum(1 for chapter in chapters if chapter.get("download")),
             show_read_chapters=show_read_chapters,
             download_base_url=download_base_url,
+            manga_oni_url=source_manga_oni_url,
+            chapter_error=chapter_error,
         )
 
     @app.post("/mangas/<int:manga_id>/refresh")
@@ -707,6 +737,22 @@ def register_routes(app):
             flash(f"URL base de descarga borrada para {manga['name']}.", "success")
         return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
+    @app.post("/mangas/<int:manga_id>/manga-oni")
+    def set_manga_oni_source(manga_id):
+        manga = store.get_manga(manga_id)
+        if not manga:
+            abort(404)
+
+        source_url = request.form.get("manga_oni_url", "").strip()
+        normalized_url = normalize_manga_url(source_url) if source_url else ""
+        if source_url and not normalized_url:
+            flash("La URL de Manga Oni no es valida.", "error")
+            return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
+        store.set_manga_oni_url(manga_id, normalized_url)
+        flash(f"Fuente de Manga Oni guardada para {manga['name']}.", "success")
+        return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
     @app.post("/mangas/<int:manga_id>/capitulos/descargar")
     def download_manga_chapter_route(manga_id):
         manga = store.get_manga(manga_id)
@@ -714,45 +760,86 @@ def register_routes(app):
             abort(404)
 
         chapter = request.form.get("chapter", "").strip()
-        download_url = request.form.get("download_url", "").strip()
         if not chapter:
             abort(400)
-        if not download_url:
-            download_url = manga_chapter_download_url(manga_download_base_url(manga), chapter)
-        if not download_url:
+
+        chapters, _ = preferred_manga_chapters(manga_id, manga)
+        chapter_data = next(
+            (item for item in chapters if manga_chapter_key(item.get("chapter")) == manga_chapter_key(chapter)),
+            {"chapter": chapter},
+        )
+        download_urls = manga_chapter_download_candidates(
+            chapter_data,
+            manga_download_base_url(manga),
+            request.form.get("download_url", ""),
+        )
+        if not download_urls:
             flash("Pega la URL del capitulo para descargarlo.", "error")
             return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
-        chapter_key = manga_chapter_key(chapter)
-        chapter_dir = manga_download_folder(manga_id, chapter_key)
-        temp_chapter_dir = manga_download_temp_folder(manga_id, chapter_key)
         try:
-            result = download_manga_chapter(
-                download_url,
-                temp_chapter_dir,
-                chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
-            )
+            result, _ = download_and_store_manga_chapter(manga_id, chapter_data, download_urls)
         except MissingMangaDownloadDependency as exc:
-            delete_manga_download_folder(temp_chapter_dir)
             flash(str(exc), "error")
         except MangaDownloadError as exc:
-            delete_manga_download_folder(temp_chapter_dir)
             flash(f"No se pudo descargar el capitulo {chapter}: {exc}", "error")
         else:
-            replace_manga_download_folder(temp_chapter_dir, chapter_dir)
-            store.upsert_manga_download(
-                manga_id,
-                chapter_key,
-                download_url,
-                manga_download_relative_folder(manga_id, chapter_key),
-                result.panel_count,
-                result.page_count,
-            )
             flash(
                 f"Capitulo {chapter} descargado con {result.panel_count} imagenes usando {result.strategy}.",
                 "success",
             )
 
+        return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
+    @app.post("/mangas/<int:manga_id>/capitulos/descargar-hasta")
+    def download_manga_chapters_until(manga_id):
+        manga = store.get_manga(manga_id)
+        if not manga:
+            abort(404)
+
+        target = parse_chapter_number(request.form.get("chapter"))
+        if target is None:
+            abort(400)
+
+        chapters, chapter_error = preferred_manga_chapters(manga_id, manga)
+        if chapter_error and not chapters:
+            flash(f"No se pudieron cargar los capitulos: {chapter_error}", "error")
+            return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
+        read_number = parse_chapter_number(store.get_manga_progress(manga_id).get("chapter_read"))
+        downloads = {item["chapter_key"] for item in store.list_manga_downloads(manga_id)}
+        pending = [
+            chapter for chapter in chapters
+            if chapter.get("chapter_number") is not None
+            and chapter["chapter_number"] <= target
+            and (read_number is None or chapter["chapter_number"] > read_number)
+            and manga_chapter_key(chapter.get("chapter")) not in downloads
+        ]
+        pending.sort(key=lambda chapter: chapter["chapter_number"])
+        if not pending:
+            flash("No hay capitulos pendientes sin descargar hasta ese punto.", "warning")
+            return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
+        downloaded = 0
+        failures = []
+        download_base_url = manga_download_base_url(manga)
+        for chapter in pending:
+            urls = manga_chapter_download_candidates(chapter, download_base_url)
+            try:
+                download_and_store_manga_chapter(manga_id, chapter, urls)
+            except (MissingMangaDownloadDependency, MangaDownloadError) as exc:
+                failures.append(f"{chapter['chapter']}: {exc}")
+            else:
+                downloaded += 1
+
+        if downloaded:
+            flash(f"Se descargaron {downloaded} capitulos pendientes.", "success")
+        if failures:
+            preview = " / ".join(failures[:3])
+            remaining = len(failures) - 3
+            if remaining > 0:
+                preview = f"{preview} / y {remaining} mas"
+            flash(f"No se pudieron descargar {len(failures)} capitulos: {preview}", "error")
         return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
     @app.get("/mangas/<int:manga_id>/capitulos/<chapter>/leer")
@@ -1346,7 +1433,8 @@ def register_routes(app):
         source_filter_submitted = request.args.get("fuentes") == "seleccionadas"
         include_rejected = request.args.get("rechazadas") == "1"
         author_query = request.args.get("autor", "").strip()
-        author_id = request.args.get("autor_id", type=int)
+        author_id = request.args.get("autor_id", "").strip()
+        author_source = request.args.get("autor_fuente", "").strip().casefold()
         current_year = date.today().year
         year_from = request.args.get("desde", type=int)
         year_to = request.args.get("hasta", type=int)
@@ -1378,16 +1466,24 @@ def register_routes(app):
                 raw_candidates.extend(get_anilist_manga_profile_candidates(profile_states))
                 if author_id or author_query:
                     selected_author, author_candidates, author_search_results = (
-                        get_manual_author_manga_recommendation_context(author_id, author_query)
+                        get_manual_author_manga_recommendation_context(
+                            author_id,
+                            author_query,
+                            author_source=author_source,
+                        )
                     )
                     raw_candidates.extend(author_candidates)
                 else:
                     raw_candidates.extend(get_anilist_manga_author_candidates(profile_states))
-            except AniListError as exc:
+            except (AniListError, MangaDexError) as exc:
                 sync_errors.append(str(exc))
         else:
             sync_errors.append("AniList no esta configurado.")
 
+        raw_candidates = canonical_manga_recommendation_candidates(
+            raw_candidates,
+            store.list_mangas(),
+        )
         rejected_ids = store.get_rejected_manga_recommendation_ids()
         recommendations, genres = rank_recommendations(
             profile_states,
@@ -1445,6 +1541,7 @@ def register_routes(app):
             source_filter_submitted=source_filter_submitted,
             include_rejected=include_rejected,
             author_query=author_query,
+            author_source=author_source,
             selected_author=selected_author,
             author_search_results=author_search_results,
         )
@@ -1497,6 +1594,7 @@ def register_routes(app):
             "author.html",
             author=author,
             author_source_label=author_source_label,
+            author_source=author_source_label.casefold(),
             manga_credits=manga_credits,
         )
 
@@ -1582,6 +1680,19 @@ def get_mangadex_client():
     return g.mangadex_client
 
 
+def get_manga_oni_client():
+    injected = current_app.config.get("MANGA_ONI_CLIENT")
+    if injected:
+        return injected
+
+    if "manga_oni_client" not in g:
+        g.manga_oni_client = MangaOniClient(
+            base_url=current_app.config["MANGA_ONI_BASE_URL"],
+            enabled=current_app.config["MANGA_ONI_ENABLED"],
+        )
+    return g.manga_oni_client
+
+
 def is_tmdb_enabled():
     return get_tmdb_client().enabled
 
@@ -1599,15 +1710,17 @@ def is_mangadex_enabled():
 
 
 def cached_json(key, ttl_seconds, producer, refresh=False):
-    cached = store.cache_get(key)
-    if cached is not None and not refresh:
+    cached = None if refresh else store.cache_get(key)
+    if cached is not None:
         return cached
+
+    fallback = store.cache_get(key, allow_expired=True)
 
     try:
         payload = producer()
-    except (TMDbError, AniListError, ComicKError, MangaDexError):
-        if cached is not None:
-            return cached
+    except (TMDbError, AniListError, ComicKError, MangaDexError, MangaOniError):
+        if fallback is not None:
+            return fallback
         raise
 
     store.cache_set(key, payload, ttl_seconds)
@@ -2320,6 +2433,49 @@ def manga_download_base_url(manga):
     return ""
 
 
+def manga_oni_url(manga):
+    stored_url = store.get_manga_oni_url(manga["id"])
+    if stored_url:
+        return normalize_manga_url(stored_url)
+    return default_manga_url(manga.get("name") or manga.get("original_name"))
+
+
+def get_manga_oni_chapters(manga, refresh=False):
+    source_url = manga_oni_url(manga)
+    if not source_url or not get_manga_oni_client().enabled:
+        return []
+    return cached_json(
+        f"manga-oni:chapters:{source_url.casefold()}",
+        current_app.config["MANGA_ONI_CACHE_SECONDS"],
+        lambda: get_manga_oni_client().get_manga_chapters(source_url),
+        refresh=refresh,
+    )
+
+
+def merge_manga_oni_chapters(chapters, manga_oni_chapters):
+    merged = {chapter.get("chapter"): dict(chapter) for chapter in chapters if chapter.get("chapter")}
+    for oni_chapter in manga_oni_chapters:
+        chapter_number = oni_chapter.get("chapter")
+        current = merged.get(chapter_number)
+        if not current:
+            merged[chapter_number] = dict(oni_chapter)
+            continue
+        if oni_chapter.get("title"):
+            current["title"] = oni_chapter["title"]
+        current["download_url"] = oni_chapter.get("download_url")
+        current["manga_oni_url"] = oni_chapter.get("official_url")
+        current["title_source"] = "Manga Oni"
+
+    return sorted(
+        merged.values(),
+        key=lambda chapter: (
+            chapter.get("chapter_number") is None,
+            chapter.get("chapter_number") or 0,
+            chapter.get("chapter") or "",
+        ),
+    )
+
+
 def manga_chapter_download_url(base_url, chapter):
     base_url = (base_url or "").strip().rstrip("/")
     if not base_url or not chapter:
@@ -2332,11 +2488,23 @@ def attach_manga_downloads_to_chapters(manga_id, chapters, download_base_url="")
         download["chapter_key"]: download
         for download in store.list_manga_downloads(manga_id)
     }
-    for chapter in chapters:
+    read_number = parse_chapter_number(store.get_manga_progress(manga_id).get("chapter_read"))
+    pending_download_count = 0
+    for chapter in sorted(chapters, key=lambda item: item.get("chapter_number") or 0):
         chapter_key = manga_chapter_key(chapter.get("chapter") or chapter.get("id"))
         chapter["chapter_key"] = chapter_key
-        chapter["download_url"] = manga_chapter_download_url(download_base_url, chapter.get("chapter"))
+        chapter["download_url"] = chapter.get("download_url") or manga_chapter_download_url(
+            download_base_url,
+            chapter.get("chapter"),
+        )
         download = downloads.get(chapter_key)
+        if (
+            not download
+            and chapter.get("chapter_number") is not None
+            and (read_number is None or chapter["chapter_number"] > read_number)
+        ):
+            pending_download_count += 1
+        chapter["pending_download_count"] = pending_download_count
         if not download:
             chapter["download"] = None
             continue
@@ -2348,6 +2516,76 @@ def attach_manga_downloads_to_chapters(manga_id, chapters, download_base_url="")
             "resume_panel": progress.get("current_panel") or 1,
         }
     return chapters
+
+
+def preferred_manga_chapters(manga_id, manga, refresh=False):
+    errors = []
+    try:
+        chapters = numbered_manga_chapters(get_manga_chapters(manga_id, refresh=refresh))
+    except (ComicKError, MangaDexError) as exc:
+        chapters = []
+        errors.append(str(exc))
+
+    try:
+        oni_chapters = get_manga_oni_chapters(manga, refresh=refresh)
+    except MangaOniError as exc:
+        oni_chapters = []
+        errors.append(str(exc))
+
+    chapters = numbered_manga_chapters(merge_manga_oni_chapters(chapters, oni_chapters))
+    chapter_read_number = parse_chapter_number(store.get_manga_progress(manga_id).get("chapter_read"))
+    chapters = mark_manga_chapters_read(chapters, chapter_read_number)
+    return chapters, " / ".join(dict.fromkeys(errors)) if not chapters else None
+
+
+def manga_chapter_download_candidates(chapter, download_base_url="", explicit_url=""):
+    candidates = []
+    for candidate in (
+        explicit_url,
+        chapter.get("download_url"),
+        manga_chapter_download_url(download_base_url, chapter.get("chapter")),
+        chapter.get("official_url"),
+    ):
+        candidate = (candidate or "").strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def download_and_store_manga_chapter(manga_id, chapter, download_urls):
+    chapter_label = chapter.get("chapter") or chapter.get("chapter_key")
+    chapter_key = manga_chapter_key(chapter_label)
+    chapter_dir = manga_download_folder(manga_id, chapter_key)
+    temp_chapter_dir = manga_download_temp_folder(manga_id, chapter_key)
+    errors = []
+
+    for download_url in download_urls:
+        try:
+            result = download_manga_chapter(
+                download_url,
+                temp_chapter_dir,
+                chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
+            )
+        except MissingMangaDownloadDependency:
+            delete_manga_download_folder(temp_chapter_dir)
+            raise
+        except MangaDownloadError as exc:
+            delete_manga_download_folder(temp_chapter_dir)
+            errors.append(str(exc))
+            continue
+
+        replace_manga_download_folder(temp_chapter_dir, chapter_dir)
+        store.upsert_manga_download(
+            manga_id,
+            chapter_key,
+            download_url,
+            manga_download_relative_folder(manga_id, chapter_key),
+            result.panel_count,
+            result.page_count,
+        )
+        return result, download_url
+
+    raise MangaDownloadError(" / ".join(errors) or "No hay una URL disponible para descargar el capitulo.")
 
 
 def manga_reader_pages(manga_id, chapter_key):
@@ -2725,6 +2963,64 @@ def find_comick_id_for_manga(manga, allow_fallback=True):
     return None
 
 
+def ensure_mangadex_link_for_manga(manga):
+    if not manga or manga.get("mangadex_id") or not is_mangadex_enabled():
+        return manga
+
+    mangadex_id = find_mangadex_id_for_manga(manga, allow_fallback=False)
+    if not mangadex_id:
+        return manga
+
+    existing_manga = store.get_manga_by_mangadex_id(mangadex_id)
+    if existing_manga and existing_manga["id"] != manga["id"]:
+        return {**manga, "mangadex_id": mangadex_id}
+
+    try:
+        mangadex_manga = get_mangadex_manga_for_storage(mangadex_id, refresh=True)
+    except MangaDexError:
+        return {**manga, "mangadex_id": mangadex_id}
+    if not mangadex_manga:
+        return {**manga, "mangadex_id": mangadex_id}
+
+    merged = merge_manga_storage(manga, mangadex_manga)
+    store.upsert_manga(merged)
+    return store.get_manga(manga["id"]) or merged
+
+
+def find_mangadex_id_for_manga(manga, allow_fallback=True):
+    query = manga.get("original_name") or manga.get("name")
+    if not query:
+        return None
+
+    wanted_year = (manga.get("premiered") or "")[:4]
+    wanted_signature = show_signature(manga)
+    for search_query in tmdb_search_queries(query):
+        try:
+            raw_results = cached_json(
+                f"mangadex:resolve:manga:{search_query.casefold()}:{wanted_year}",
+                current_app.config["MANGADEX_CACHE_SECONDS"],
+                lambda search_query=search_query: get_mangadex_client().search_manga(search_query),
+            )
+        except MangaDexError:
+            continue
+
+        normalized = []
+        for raw_manga in raw_results:
+            if not raw_manga.get("id"):
+                continue
+            candidate = normalize_mangadex_manga(raw_manga)
+            normalized.append(candidate)
+            if show_signature(candidate) == wanted_signature:
+                return candidate["mangadex_id"]
+
+        for candidate in normalized:
+            if wanted_year and (candidate.get("premiered") or "")[:4] == wanted_year:
+                return candidate["mangadex_id"]
+        if normalized and allow_fallback:
+            return normalized[0]["mangadex_id"]
+    return None
+
+
 def get_anilist_manga_from_anilist_id(anilist_id, refresh=False):
     return cached_json(
         f"anilist:manga:{anilist_id}",
@@ -2748,7 +3044,14 @@ def get_manga_chapters(manga_id, refresh=False):
     if not manga:
         return []
     if manga.get("comick_id") and is_comick_enabled():
-        return get_comick_manga_chapters(manga, refresh=refresh)
+        try:
+            return get_comick_manga_chapters(manga, refresh=refresh)
+        except ComicKError:
+            if is_mangadex_enabled():
+                fallback_manga = ensure_mangadex_link_for_manga(manga)
+                if fallback_manga.get("mangadex_id"):
+                    return get_mangadex_manga_chapters(fallback_manga, refresh=refresh)
+            raise
     if manga.get("mangadex_id") and is_mangadex_enabled():
         return get_mangadex_manga_chapters(manga, refresh=refresh)
     return []
@@ -2758,10 +3061,10 @@ def get_comick_manga_chapters(manga, refresh=False):
     comick_id = manga["comick_id"]
     languages = current_app.config["COMICK_LANGUAGES"]
     fetch_limit = current_app.config["COMICK_CHAPTER_FETCH_LIMIT"]
+    page_size = max(1, current_app.config["COMICK_CHAPTER_PAGE_SIZE"])
 
     def load_chapters():
         chapters = []
-        page_size = 1000
         for language in languages:
             fetched_for_language = 0
             page = 1
@@ -3060,6 +3363,98 @@ def merge_anilist_manga_candidate(
     return manga
 
 
+def merge_normalized_manga_candidate(
+    candidates,
+    candidates_by_id,
+    manga,
+    source_label=None,
+    actor_source=None,
+):
+    identity = (
+        f"comick:{manga.get('comick_id')}" if manga.get("comick_id")
+        else f"mangadex:{manga.get('mangadex_id')}" if manga.get("mangadex_id")
+        else f"anilist:{manga.get('anilist_id')}" if manga.get("anilist_id")
+        else f"title:{show_signature(manga)}"
+    )
+    existing = candidates_by_id.get(identity)
+    if existing:
+        manga = existing
+    else:
+        candidates_by_id[identity] = manga
+        candidates.append(manga)
+
+    if source_label and not manga.get("source_label"):
+        manga["source_label"] = source_label
+    if actor_source:
+        sources = manga.setdefault("actor_sources", [])
+        if actor_source["id"] not in {item["id"] for item in sources}:
+            sources.append(actor_source)
+    return manga
+
+
+def merge_mangadex_author_candidates(candidates, candidates_by_id, author, source_shows=None):
+    author_source = {
+        "id": author["id"],
+        "name": author["name"],
+        "source_shows": source_shows or [],
+    }
+    for raw_item in get_mangadex_author_manga_raw(author["id"]):
+        manga = normalize_mangadex_manga(raw_item)
+        manga["author_role"] = raw_item.get("staff_role") or ""
+        merge_normalized_manga_candidate(
+            candidates,
+            candidates_by_id,
+            manga,
+            source_label=f"MangaDex por {author['name']}",
+            actor_source=author_source,
+        )
+
+
+def canonical_manga_recommendation_candidates(candidates, saved_mangas):
+    saved_signatures = {
+        signature
+        for manga in saved_mangas
+        for signature in manga_title_identity_keys(manga)
+    }
+    canonical = []
+    by_signature = {}
+    for manga in candidates:
+        signatures = manga_title_identity_keys(manga)
+        if signatures & saved_signatures:
+            continue
+        existing = next(
+            (by_signature[item] for item in signatures if item in by_signature),
+            None,
+        )
+        if not existing:
+            for item in signatures:
+                by_signature[item] = manga
+            canonical.append(manga)
+            continue
+        for item in signatures:
+            by_signature.setdefault(item, existing)
+        for field in ("profile_sources", "actor_sources"):
+            current_items = existing.setdefault(field, [])
+            current_ids = {item.get("id") for item in current_items}
+            for item in manga.get(field) or []:
+                if item.get("id") not in current_ids:
+                    current_items.append(item)
+                    current_ids.add(item.get("id"))
+        if not existing.get("source_label") and manga.get("source_label"):
+            existing["source_label"] = manga["source_label"]
+    return canonical
+
+
+def manga_title_identity_keys(manga):
+    year = (manga.get("premiered") or "")[:4]
+    keys = {
+        (fold_search_text(title).casefold(), year)
+        for title in (manga.get("name"), manga.get("original_name"))
+        if title
+    }
+    return keys or {(str(manga.get("id") or ""), year)}
+
+
 def get_tmdb_profile_candidates(show_states):
     if not is_tmdb_enabled():
         return []
@@ -3341,9 +3736,6 @@ def get_anilist_manga_profile_candidates(manga_states):
 
 
 def get_anilist_manga_author_candidates(manga_states):
-    if not is_anilist_enabled():
-        return []
-
     candidates = []
     candidates_by_id = {}
     source_mangas = [
@@ -3353,31 +3745,42 @@ def get_anilist_manga_author_candidates(manga_states):
 
     for source in source_mangas:
         for author in get_manga_authors(source["id"], limit=current_app.config["AUTHOR_RECOMMENDATION_STAFF_PER_MANGA"]):
-            if not isinstance(author.get("id"), int):
-                continue
-            author_source = {
-                "id": author["id"],
-                "name": author["name"],
-                "source_shows": [source["name"]],
-            }
-            for raw_item in get_staff_manga_raw(author["id"]):
-                merge_anilist_manga_candidate(
+            if isinstance(author.get("id"), int) and is_anilist_enabled():
+                author_source = {
+                    "id": author["id"],
+                    "name": author["name"],
+                    "source_shows": [source["name"]],
+                }
+                for raw_item in get_staff_manga_raw(author["id"]):
+                    merge_anilist_manga_candidate(
+                        candidates,
+                        candidates_by_id,
+                        raw_item,
+                        source_label=f"AniList por {author['name']}",
+                        actor_source=author_source,
+                    )
+            elif is_mangadex_enabled():
+                merge_mangadex_author_candidates(
                     candidates,
                     candidates_by_id,
-                    raw_item,
-                    source_label=f"AniList por {author['name']}",
-                    actor_source=author_source,
+                    author,
+                    source_shows=[source["name"]],
                 )
 
     return candidates
 
 
-def get_manual_author_manga_recommendation_context(author_id=None, author_query=""):
+def get_manual_author_manga_recommendation_context(author_id=None, author_query="", author_source=""):
     author_search_results = []
     selected_author = None
+    use_mangadex = author_source == "mangadex" or bool(
+        author_id and re.fullmatch(r"[0-9a-f-]{36}", str(author_id), flags=re.IGNORECASE)
+    )
 
-    if author_id:
-        selected_author = get_anilist_staff(author_id)
+    if author_id and use_mangadex:
+        selected_author = get_mangadex_author(str(author_id))
+    elif author_id:
+        selected_author = get_anilist_staff(int(author_id))
     elif author_query:
         author_search_results = search_anilist_staff(author_query)
         if author_search_results:
@@ -3388,6 +3791,10 @@ def get_manual_author_manga_recommendation_context(author_id=None, author_query=
 
     candidates = []
     candidates_by_id = {}
+    if use_mangadex:
+        merge_mangadex_author_candidates(candidates, candidates_by_id, selected_author)
+        return selected_author, candidates, author_search_results
+
     author_source = {
         "id": selected_author["id"],
         "name": selected_author["name"],
