@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ARCATV">
+    <rect width="64" height="64" rx="14" fill="#2f6f73"/>
+    <path d="M17 18h30a5 5 0 0 1 5 5v18a5 5 0 0 1-5 5H17a5 5 0 0 1-5-5V23a5 5 0 0 1 5-5Z" fill="#f4f7f2"/>
+    <path d="M29 25v14l13-7-13-7Z" fill="#c75f3b"/>
+    <path d="M18 48h28" stroke="#24585b" stroke-width="4" stroke-linecap="round"/>
+</svg>

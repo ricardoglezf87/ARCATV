@@ -1087,8 +1087,10 @@ select {
 
 @media (max-width: 900px) {
     .topbar {
+        position: static;
         grid-template-columns: 1fr;
         gap: 12px;
+        backdrop-filter: none;
     }
 
     .main-nav {

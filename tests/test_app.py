@@ -1,14 +1,19 @@
+import base64
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
+from PIL import Image
 
 from arcatv import db as store
 from arcatv import manga_downloads
-from arcatv import build_recommendation_sections, create_app
+from arcatv import build_recommendation_sections, cached_json, create_app, get_comick_manga_chapters
 from arcatv.anilist import normalize_anilist_manga, synthetic_anilist_manga_id
-from arcatv.comick import synthetic_comick_manga_id
+from arcatv.comick import ComicKError, normalize_comick_manga, synthetic_comick_manga_id
 from arcatv.mangadex import synthetic_mangadex_manga_id
+from arcatv.manga_oni import parse_manga_chapters
 from arcatv.recommendations import add_recommendation_reasons, rank_recommendations
 from arcatv.tmdb import (
     TMDbClient,
@@ -547,6 +552,38 @@ class FakeComicKClient:
         }
 
 
+class FakeMangaOniClient:
+    enabled = True
+
+    def __init__(self, chapters=None):
+        self.chapters = chapters or []
+
+    def get_manga_chapters(self, manga_url):
+        assert manga_url.startswith("https://manga-oni.com/manga/")
+        return self.chapters
+
+
+class FailingComicKChaptersClient(FakeComicKClient):
+    def get_manga_chapters(self, comick_id, language="es", page=1, limit=1000):
+        raise ComicKError("ComicK rechazo la peticion desde este servidor (403).")
+
+
+class RecordingComicKClient(FakeComicKClient):
+    def __init__(self):
+        self.chapter_calls = []
+
+    def get_manga_chapters(self, comick_id, language="es", page=1, limit=1000):
+        self.chapter_calls.append(
+            {
+                "comick_id": comick_id,
+                "language": language,
+                "page": page,
+                "limit": limit,
+            }
+        )
+        return super().get_manga_chapters(comick_id, language=language, page=page, limit=limit)
+
+
 class DisabledTMDbClient:
     enabled = False
 
@@ -597,6 +634,7 @@ def app(tmp_path):
             "ANILIST_CLIENT": FakeAniListClient(),
             "COMICK_CLIENT": FakeComicKClient(),
             "MANGADEX_CLIENT": FakeMangaDexClient(),
+            "MANGA_ONI_CLIENT": FakeMangaOniClient(),
         }
     )
 
@@ -869,6 +907,78 @@ def test_manga_search_add_chapter_progress_authors_and_recommendations(client):
     assert f'name="origen"' in recommendations_html
 
 
+def test_manga_detail_falls_back_to_mangadex_when_comick_chapters_fail(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "comick-error.sqlite"),
+            "MANGA_DOWNLOAD_ROOT": str(tmp_path / "manga-downloads"),
+            "TMDB_CLIENT": FakeTMDbClient(),
+            "ANILIST_CLIENT": FakeAniListClient(),
+            "COMICK_CLIENT": FailingComicKChaptersClient(),
+            "MANGADEX_CLIENT": FakeMangaDexClient(),
+        }
+    )
+
+    html = app.test_client().post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+
+    assert "Manga Base" in html
+    assert "Cap. 1035" in html
+    assert "Capitulo base" in html
+    assert "No se pudieron cargar los capitulos" not in html
+
+    with app.app_context():
+        manga = store.get_manga(synthetic_comick_manga_id(COMICK_MANGA_ID))
+        assert manga["comick_id"] == COMICK_MANGA_ID
+        assert manga["mangadex_id"] == MANGADEX_MANGA_ID
+
+
+def test_comick_chapter_fetch_uses_configured_page_size(tmp_path):
+    comick_client = RecordingComicKClient()
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "comick-page-size.sqlite"),
+            "COMICK_CLIENT": comick_client,
+            "COMICK_CHAPTER_FETCH_LIMIT": 2,
+            "COMICK_CHAPTER_PAGE_SIZE": 1,
+        }
+    )
+
+    with app.app_context():
+        manga = normalize_comick_manga(COMICK_MANGA)
+        store.upsert_manga(manga)
+        get_comick_manga_chapters(manga)
+
+    assert all(call["limit"] <= 1 for call in comick_client.chapter_calls)
+    assert [
+        call["page"]
+        for call in comick_client.chapter_calls
+        if call["language"] == "es"
+    ] == [1, 2]
+
+
+def test_cached_json_uses_expired_payload_when_provider_fails(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "expired-cache.sqlite"),
+        }
+    )
+
+    def fail():
+        raise ComicKError("ComicK caido")
+
+    with app.app_context():
+        store.cache_set("demo:expired", {"value": "old"}, -1)
+
+        assert cached_json("demo:expired", 60, fail) == {"value": "old"}
+
+
 def test_manga_chapter_download_reader_progress_and_cleanup(client, app, monkeypatch):
     manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
     client.post(
@@ -1028,6 +1138,151 @@ def test_global_search_can_target_series_or_movies(client):
     assert "La Serie Perdida" in series_html
     assert "Pelicula Base" in movie_html
     assert "Manga Base" in manga_html
+
+
+def test_manga_oni_parses_spanish_titles_and_cascade_urls():
+    chapters = parse_manga_chapters(
+        """
+        <a href="/lector/one-piece/698105/p1">
+            Hace un ano Capitulo 1135 - Copas de amistad
+        </a>
+        <a href="/lector/one-piece/786360/">
+            Hace 15 dias Capitulo 1189 — Rey del mundo
+        </a>
+        """,
+        "https://manga-oni.com/manga/one-piece/",
+    )
+
+    assert [chapter["chapter"] for chapter in chapters] == ["1135", "1189"]
+    assert chapters[0]["title"] == "Copas de amistad"
+    assert chapters[0]["download_url"] == "https://manga-oni.com/lector/one-piece/698105/cascada/"
+
+
+def test_manga_oni_direct_download_is_first_strategy(tmp_path, monkeypatch):
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (40, 60), "white").save(image_buffer, "WEBP")
+    image_bytes = image_buffer.getvalue()
+    payload = base64.b64encode(b'https://oni.test/||["001.webp"]||').decode("ascii")
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, text="", content=b""):
+            self.text = text
+            self.content = content
+
+        def raise_for_status(self):
+            return None
+
+    class Session:
+        def get(self, url, **_kwargs):
+            if url.endswith("/cascada/"):
+                return Response(f"<script>var unicap = '{payload}';</script><div id=\"slider\"></div>")
+            return Response(content=image_bytes)
+
+    monkeypatch.setattr(manga_downloads.requests, "Session", Session)
+    monkeypatch.setattr(
+        manga_downloads,
+        "_load_image_dependencies",
+        lambda: (BeautifulSoup, Image, None, None),
+    )
+
+    result = manga_downloads.download_manga_chapter(
+        "https://manga-oni.com/lector/one-piece/698105/p1",
+        tmp_path / "chapter",
+    )
+
+    assert result.strategy == "Manga Oni"
+    assert result.page_count == 1
+    assert (tmp_path / "chapter" / "001.jpg").exists()
+
+
+def test_download_until_skips_read_and_downloaded_chapters(client, app, monkeypatch):
+    manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    oni_chapters = parse_manga_chapters(
+        """
+        <a href="/lector/one-piece/1/">Capitulo 1035 — Ya leido</a>
+        <a href="/lector/one-piece/2/">Capitulo 1036 — Ya descargado</a>
+        <a href="/lector/one-piece/3/">Capitulo 1037 — Titulo preferente</a>
+        """,
+        "https://manga-oni.com/manga/one-piece/",
+    )
+    app.config["MANGA_ONI_CLIENT"] = FakeMangaOniClient(oni_chapters)
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=False,
+    )
+    client.post(f"/mangas/{manga_id}/leido", data={"chapter_read": "1035"})
+    with app.app_context():
+        store.upsert_manga_download(manga_id, "1036", "saved", "saved", 1, 1)
+
+    downloaded = []
+
+    def fake_download(url, chapter_dir, chrome_version=None):
+        downloaded.append(url)
+        chapter_dir = Path(chapter_dir)
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        (chapter_dir / "001.jpg").write_bytes(b"panel")
+        return SimpleNamespace(panel_count=1, page_count=1, strategy="prueba")
+
+    monkeypatch.setattr("arcatv.download_manga_chapter", fake_download)
+    html = client.post(
+        f"/mangas/{manga_id}/capitulos/descargar-hasta",
+        data={"chapter": "1037"},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+
+    assert downloaded == ["https://manga-oni.com/lector/one-piece/3/cascada/"]
+    assert "Se descargaron 1 capitulos pendientes." in html
+    assert "Titulo preferente" in html
+
+
+def test_manga_oni_only_chapter_updates_read_state(client, app):
+    manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    app.config["MANGA_ONI_CLIENT"] = FakeMangaOniClient(
+        parse_manga_chapters(
+            '<a href="/lector/manga-base/2/">Capitulo 1036 - Titulo de Manga Oni</a>',
+            "https://manga-oni.com/manga/manga-base/",
+        )
+    )
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=False,
+    )
+
+    html = client.post(
+        f"/mangas/{manga_id}/leido",
+        data={"chapter_read": "1036"},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+
+    assert "Titulo de Manga Oni" not in html
+    read_html = client.get(f"/mangas/{manga_id}?leidos=1").get_data(as_text=True)
+    assert "Titulo de Manga Oni" in read_html
+    assert 'name="chapter_read" value="1035"' in read_html
+    with app.app_context():
+        assert store.get_manga_progress(manga_id)["chapter_read"] == "1036"
+
+
+def test_mangadex_author_recommendations_keep_same_source(client):
+    recommendations_html = client.get(
+        f"/recomendaciones/mangas?autor=Autor+Demo&autor_id={MANGADEX_AUTHOR_ID}&autor_fuente=mangadex"
+    ).get_data(as_text=True)
+
+    assert "Con Autor Demo" in recommendations_html
+    assert "Manga Base" in recommendations_html
+
+    response = client.post(
+        f"/mangas/{synthetic_mangadex_manga_id(MANGADEX_MANGA_ID)}/add",
+        data={"source": "mangadex", "source_id": MANGADEX_MANGA_ID},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(
+        f"/mangas/{synthetic_mangadex_manga_id(MANGADEX_MANGA_ID)}"
+    )
 
 
 def test_search_requires_tmdb_configuration(tmp_path):

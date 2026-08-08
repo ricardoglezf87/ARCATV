@@ -19,10 +19,10 @@
         {% if author.biography %}
             <p>{{ author.biography }}</p>
         {% else %}
-            <p class="muted">AniList todavia no tiene biografia para este autor.</p>
+            <p class="muted">{{ author_source_label }} todavia no tiene biografia para este autor.</p>
         {% endif %}
         <div class="detail-actions">
-            <a class="button button-primary" href="{{ url_for('manga_recommendations', autor=author.name, autor_id=author.id) }}">Ver recomendaciones</a>
+            <a class="button button-primary" href="{{ url_for('manga_recommendations', autor=author.name, autor_id=author.id, autor_fuente=author_source) }}">Ver recomendaciones</a>
             <a class="button button-secondary" href="{{ author.official_url }}" target="_blank" rel="noreferrer">Abrir en {{ author_source_label }}</a>
         </div>
     </div>
@@ -60,6 +60,8 @@
                             <a class="button button-secondary" href="{{ url_for('manga_detail', manga_id=manga.id) }}">Abrir</a>
                         {% else %}
                             <form action="{{ url_for('add_manga', manga_id=manga.id) }}" method="post">
+                                <input type="hidden" name="source" value="{{ manga.source or '' }}">
+                                <input type="hidden" name="source_id" value="{{ manga.mangadex_id or manga.comick_id or manga.anilist_id or '' }}">
                                 <button class="button button-primary" type="submit">Anadir</button>
                             </form>
                         {% endif %}
