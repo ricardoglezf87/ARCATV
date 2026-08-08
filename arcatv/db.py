@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS manga_reader_progress (
 CREATE TABLE IF NOT EXISTS manga_download_preferences (
     manga_id INTEGER PRIMARY KEY,
     base_url TEXT,
+    manga_oni_url TEXT,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
 );
@@ -184,6 +185,12 @@ def ensure_columns(db):
     if manga_columns and "mangadex_id" not in manga_columns:
         db.execute("ALTER TABLE mangas ADD COLUMN mangadex_id TEXT")
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mangas_mangadex_id ON mangas(mangadex_id)")
+
+    download_preference_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(manga_download_preferences)").fetchall()
+    }
+    if download_preference_columns and "manga_oni_url" not in download_preference_columns:
+        db.execute("ALTER TABLE manga_download_preferences ADD COLUMN manga_oni_url TEXT")
 
 
 def init_app(app):
@@ -559,11 +566,22 @@ def get_manga_download_base_url(manga_id):
     return row["base_url"] if row and row["base_url"] else None
 
 
+def get_manga_oni_url(manga_id):
+    row = get_db().execute(
+        "SELECT manga_oni_url FROM manga_download_preferences WHERE manga_id = ?",
+        (manga_id,),
+    ).fetchone()
+    return row["manga_oni_url"] if row and row["manga_oni_url"] else None
+
+
 def set_manga_download_base_url(manga_id, base_url):
     base_url = (base_url or "").strip().rstrip("/")
     db = get_db()
     if not base_url:
-        db.execute("DELETE FROM manga_download_preferences WHERE manga_id = ?", (manga_id,))
+        db.execute(
+            "UPDATE manga_download_preferences SET base_url = NULL, updated_at = ? WHERE manga_id = ?",
+            (now_iso(), manga_id),
+        )
     else:
         db.execute(
             """
@@ -574,6 +592,28 @@ def set_manga_download_base_url(manga_id, base_url):
                 updated_at = excluded.updated_at
             """,
             (manga_id, base_url, now_iso()),
+        )
+    db.commit()
+
+
+def set_manga_oni_url(manga_id, manga_oni_url):
+    manga_oni_url = (manga_oni_url or "").strip().rstrip("/")
+    db = get_db()
+    if not manga_oni_url:
+        db.execute(
+            "UPDATE manga_download_preferences SET manga_oni_url = NULL, updated_at = ? WHERE manga_id = ?",
+            (now_iso(), manga_id),
+        )
+    else:
+        db.execute(
+            """
+            INSERT INTO manga_download_preferences (manga_id, manga_oni_url, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(manga_id) DO UPDATE SET
+                manga_oni_url = excluded.manga_oni_url,
+                updated_at = excluded.updated_at
+            """,
+            (manga_id, manga_oni_url, now_iso()),
         )
     db.commit()
 
@@ -885,7 +925,6 @@ def cache_get(key, allow_expired=False):
     if expires_at <= datetime.now(timezone.utc):
         if allow_expired:
             return json.loads(row["payload"])
-        cache_delete(key)
         return None
 
     return json.loads(row["payload"])

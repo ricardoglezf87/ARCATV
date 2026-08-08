@@ -7,9 +7,11 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
+
+from .manga_oni import get_with_ssl_fallback
 
 
 class MangaDownloadError(RuntimeError):
@@ -35,7 +37,11 @@ def download_manga_chapter(url, chapter_dir, chrome_version=None):
     chapter_dir.mkdir(parents=True, exist_ok=True)
 
     errors = []
-    for strategy in (_download_scroll_reader, _download_page_by_page_reader):
+    strategies = [_download_scroll_reader, _download_page_by_page_reader]
+    if _is_manga_oni_url(url):
+        strategies.insert(0, _download_manga_oni_reader)
+
+    for strategy in strategies:
         clear_chapter_directory(chapter_dir)
         try:
             result = strategy(url, chapter_dir, chrome_version=chrome_version)
@@ -86,7 +92,7 @@ def read_vignette_map(chapter_dir):
         return {}
 
 
-def _load_browser_dependencies():
+def _load_image_dependencies():
     missing = []
     try:
         from bs4 import BeautifulSoup
@@ -97,13 +103,6 @@ def _load_browser_dependencies():
         from PIL import Image
     except ImportError:
         missing.append("Pillow")
-
-    try:
-        import undetected_chromedriver as uc
-    except ImportError as exc:
-        missing.append("undetected-chromedriver")
-        if "distutils" in str(exc):
-            missing.append("setuptools")
 
     if missing:
         packages = ", ".join(dict.fromkeys(missing))
@@ -118,7 +117,121 @@ def _load_browser_dependencies():
         cv2 = None
         np = None
 
+    return BeautifulSoup, Image, cv2, np
+
+
+def _load_browser_dependencies():
+    BeautifulSoup, Image, cv2, np = _load_image_dependencies()
+    try:
+        import undetected_chromedriver as uc
+    except ImportError as exc:
+        packages = ["undetected-chromedriver"]
+        if "distutils" in str(exc):
+            packages.append("setuptools")
+        raise MissingMangaDownloadDependency(
+            f"Faltan dependencias para descargar capitulos: {', '.join(packages)}."
+        ) from exc
     return BeautifulSoup, Image, uc, cv2, np
+
+
+def _is_manga_oni_url(url):
+    return (urlparse(str(url or "")).hostname or "").casefold() in {
+        "manga-oni.com",
+        "www.manga-oni.com",
+    }
+
+
+def _manga_oni_cascade_url(url):
+    base_url = re.sub(r"/(?:p\d+|cascada)/?$", "", str(url or "").rstrip("/"))
+    return f"{base_url}/cascada/"
+
+
+def _download_manga_oni_reader(url, chapter_dir, chrome_version=None):
+    del chrome_version
+    BeautifulSoup, Image, cv2, np = _load_image_dependencies()
+    pages_dir = Path(chapter_dir) / "paginas_completas"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    cascade_url = _manga_oni_cascade_url(url)
+    session = requests.Session()
+
+    try:
+        response = get_with_ssl_fallback(
+            session,
+            cascade_url,
+            headers={"User-Agent": "Mozilla/5.0 ARCATV/2.0"},
+            timeout=20,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise MangaDownloadError(f"Manga Oni no respondio: {exc}") from exc
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    image_urls = _manga_oni_image_urls(soup, response.text, cascade_url)
+    if not image_urls:
+        raise MangaDownloadError("Manga Oni no encontro imagenes en la vista cascada.")
+
+    vignette_map = {}
+    vignette_counter = 1
+    page_count = 0
+    for page_index, image_url in enumerate(image_urls, start=1):
+        try:
+            image_response = get_with_ssl_fallback(
+                session,
+                image_url,
+                headers={
+                    "Referer": cascade_url,
+                    "User-Agent": "Mozilla/5.0 ARCATV/2.0",
+                },
+                timeout=20,
+            )
+            image_response.raise_for_status()
+            image_data = image_response.content
+        except requests.RequestException:
+            continue
+        try:
+            full_page = Image.open(io.BytesIO(image_data)).convert("RGB")
+        except (OSError, ValueError):
+            continue
+        vignette_counter = _save_page_and_panels(
+            full_page,
+            page_index,
+            Path(chapter_dir),
+            pages_dir,
+            vignette_counter,
+            vignette_map,
+            cv2,
+            np,
+        )
+        page_count += 1
+
+    if not page_count:
+        raise MangaDownloadError("Manga Oni no devolvio imagenes validas.")
+    _write_config(chapter_dir, vignette_map)
+    return MangaDownloadResult(
+        panel_count=vignette_counter - 1,
+        page_count=page_count,
+        strategy="Manga Oni",
+    )
+
+
+def _manga_oni_image_urls(soup, html, cascade_url):
+    image_urls = []
+    for image in soup.select("#slider img"):
+        raw_url = (image.get("data-src") or image.get("src") or "").strip()
+        if raw_url:
+            image_urls.append(urljoin(cascade_url, raw_url))
+
+    if not image_urls:
+        payload_match = re.search(r"\bunicap\s*=\s*['\"]([^'\"]+)", html or "")
+        if payload_match:
+            try:
+                directory, filenames, *_ = base64.b64decode(payload_match.group(1)).decode("utf-8").split("||")
+                for filename in json.loads(filenames.replace("&quot;", '"')):
+                    image_urls.append(urljoin(directory, filename))
+            except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+
+    return list(dict.fromkeys(image_urls))
 
 
 def _new_driver(uc, chrome_version=None, performance_logs=False):

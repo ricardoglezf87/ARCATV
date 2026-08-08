@@ -45,6 +45,16 @@ COMICK_DEMOGRAPHIC_TRANSLATIONS = {
     3: "Seinen",
     4: "Josei",
 }
+COMICK_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/138.0.0.0 Safari/537.36 ARCATV/0.1"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Referer": "https://comick.dev/",
+}
 
 
 class ComicKError(RuntimeError):
@@ -112,7 +122,7 @@ class ComicKClient:
         self.session = session or requests.Session()
         self.timeout = timeout
         self._enabled = enabled
-        self.user_agent = "ARCATV/0.1 (+local-tv-tracker)"
+        self.headers = COMICK_REQUEST_HEADERS
 
     @property
     def enabled(self):
@@ -150,13 +160,21 @@ class ComicKClient:
             response = self.session.get(
                 f"{self.base_url}{path}",
                 params=params or {},
-                headers={"User-Agent": self.user_agent},
+                headers=self.headers,
                 timeout=self.timeout,
             )
             if response.status_code == 404:
                 return {}
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.HTTPError as exc:
+            response = exc.response
+            status_code = response.status_code if response is not None else None
+            if status_code == 403:
+                raise ComicKError("ComicK rechazo la peticion desde este servidor (403).") from exc
+            if status_code:
+                raise ComicKError(f"ComicK no respondio correctamente (HTTP {status_code}).") from exc
+            raise ComicKError("ComicK no respondio correctamente.") from exc
         except requests.exceptions.SSLError as exc:
             raise ComicKError(
                 "No se pudo validar el certificado SSL de ComicK. "

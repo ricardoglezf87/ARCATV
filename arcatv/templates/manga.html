@@ -44,9 +44,15 @@
                 <button class="button button-danger" type="submit">Quitar</button>
             </form>
         </div>
+        <form class="progress-form download-base-form" action="{{ url_for('set_manga_oni_source', manga_id=manga.id) }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <label for="manga-oni-url">Manga en Manga Oni</label>
+            <input id="manga-oni-url" name="manga_oni_url" type="url" value="{{ manga_oni_url }}" placeholder="https://manga-oni.com/manga/one-piece/">
+            <button class="button button-secondary" type="submit">Guardar fuente</button>
+        </form>
         <form class="progress-form download-base-form" action="{{ url_for('set_manga_download_base', manga_id=manga.id) }}" method="post">
             <input type="hidden" name="next" value="{{ request.full_path }}">
-            <label for="download-base-url">URL base de descarga</label>
+            <label for="download-base-url">Fuente alternativa</label>
             <input id="download-base-url" name="base_url" type="url" value="{{ download_base_url }}" placeholder="https://mangasnosekai.com/manga/una-pieza">
             <button class="button button-secondary" type="submit">Guardar URL</button>
         </form>
@@ -169,6 +175,13 @@
                                 <button class="button button-secondary" type="submit">Descargar</button>
                             </form>
                         {% endif %}
+                        {% if not chapter.read and chapter.pending_download_count %}
+                            <form action="{{ url_for('download_manga_chapters_until', manga_id=manga.id) }}" method="post" data-confirm="Se descargaran {{ chapter.pending_download_count }} capitulos pendientes hasta el {{ chapter.chapter }}. Continuar?">
+                                <input type="hidden" name="next" value="{{ request.full_path }}">
+                                <input type="hidden" name="chapter" value="{{ chapter.chapter_key }}">
+                                <button class="button button-secondary" type="submit">Descargar hasta aqui</button>
+                            </form>
+                        {% endif %}
                         {% if chapter.official_url %}
                             <a class="button button-secondary" href="{{ chapter.official_url }}" target="_blank" rel="noreferrer">Abrir</a>
                         {% endif %}
@@ -190,8 +203,13 @@
         </section>
     {% else %}
         <section class="empty-state small">
-            <h2>No hay capitulos visibles</h2>
-            <p>MangaDex no ha devuelto capitulos en espanol o ingles para este manga.</p>
+            {% if chapter_error %}
+                <h2>No se pudieron cargar los capitulos</h2>
+                <p>{{ chapter_error }}</p>
+            {% else %}
+                <h2>No hay capitulos visibles</h2>
+                <p>La fuente de mangas no ha devuelto capitulos en espanol o ingles para este manga.</p>
+            {% endif %}
         </section>
     {% endif %}
 {% endif %}
