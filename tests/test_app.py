@@ -863,7 +863,8 @@ def test_manga_search_add_chapter_progress_authors_and_recommendations(client):
     assert "Capitulo base" in read_chapters_html
     assert "Cap. N/D" not in read_chapters_html
     assert "Visto" in read_chapters_html
-    assert 'name="chapter_read" value="1034"' in read_chapters_html
+    assert f'action="/mangas/{manga_id}/capitulos/1035/leido"' in read_chapters_html
+    assert 'name="read" value="0"' in read_chapters_html
 
     client.post(
         f"/mangas/{manga_id}/leido",
@@ -1261,7 +1262,8 @@ def test_manga_oni_only_chapter_updates_read_state(client, app):
     assert "Titulo de Manga Oni" not in html
     read_html = client.get(f"/mangas/{manga_id}?leidos=1").get_data(as_text=True)
     assert "Titulo de Manga Oni" in read_html
-    assert 'name="chapter_read" value="1035"' in read_html
+    assert f'action="/mangas/{manga_id}/capitulos/1036/leido"' in read_html
+    assert 'name="read" value="0"' in read_html
     with app.app_context():
         assert store.get_manga_progress(manga_id)["chapter_read"] == "1036"
 
@@ -1283,6 +1285,118 @@ def test_mangadex_author_recommendations_keep_same_source(client):
     assert response.headers["Location"].endswith(
         f"/mangas/{synthetic_mangadex_manga_id(MANGADEX_MANGA_ID)}"
     )
+
+
+def test_single_manga_chapter_can_be_seen_and_pending_independently(client, app):
+    manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=False,
+    )
+    client.post(f"/mangas/{manga_id}/leido", data={"chapter_read": "1035"})
+
+    html = client.post(
+        f"/mangas/{manga_id}/capitulos/1037/leido",
+        data={"read": "1"},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+
+    assert "Capitulo nuevo" not in html
+    assert "Sin titulo disponible" in html
+    with app.app_context():
+        assert store.get_manga_progress(manga_id)["chapter_read"] == "1035"
+        assert store.get_manga_chapter_read_override(manga_id, "1037") is True
+
+    dashboard_html = client.get("/mangas").get_data(as_text=True)
+    assert "1036 de 1037 capitulos leidos" in dashboard_html
+    assert "Cap. 1036" in dashboard_html
+
+    html = client.post(
+        f"/mangas/{manga_id}/capitulos/1037/leido",
+        data={"read": "0"},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+    assert "Capitulo nuevo" in html
+    with app.app_context():
+        assert store.get_manga_progress(manga_id)["chapter_read"] == "1035"
+        assert store.get_manga_chapter_read_override(manga_id, "1037") is False
+
+    dashboard_html = client.get("/mangas").get_data(as_text=True)
+    assert "1035 de 1037 capitulos leidos" in dashboard_html
+    assert "Cap. 1036" in dashboard_html
+
+    client.post(
+        f"/mangas/{manga_id}/capitulos/1034/leido",
+        data={"read": "0"},
+    )
+    dashboard_html = client.get("/mangas").get_data(as_text=True)
+    assert "1034 de 1037 capitulos leidos" in dashboard_html
+    assert "Cap. 1034" in dashboard_html
+
+
+def test_single_manga_download_images_can_be_deleted(client, app, monkeypatch):
+    manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=False,
+    )
+    client.post(
+        f"/mangas/{manga_id}/descarga-base",
+        data={"base_url": "https://mangasnosekai.com/manga/manga-base"},
+    )
+
+    def fake_download(_url, chapter_dir, chrome_version=None):
+        chapter_dir = Path(chapter_dir)
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        (chapter_dir / "001.jpg").write_bytes(b"panel")
+        return SimpleNamespace(panel_count=1, page_count=1, strategy="prueba")
+
+    monkeypatch.setattr("arcatv.download_manga_chapter", fake_download)
+    client.post(
+        f"/mangas/{manga_id}/capitulos/descargar",
+        data={"chapter": "1035"},
+    )
+    folder = Path(app.config["MANGA_DOWNLOAD_ROOT"]) / str(manga_id) / "1035"
+    assert folder.exists()
+
+    html = client.post(
+        f"/mangas/{manga_id}/capitulos/1035/imagenes/borrar",
+        follow_redirects=True,
+    ).get_data(as_text=True)
+
+    assert "Imagenes descargadas del capitulo 1035 borradas." in html
+    assert not folder.exists()
+    with app.app_context():
+        assert store.get_manga_download(manga_id, "1035") is None
+
+
+def test_manga_oni_chapters_render_without_comick_or_mangadex(tmp_path):
+    oni_chapters = parse_manga_chapters(
+        '<a href="/lector/manga-base/2/">Capitulo 12 - Solo en Manga Oni</a>',
+        "https://manga-oni.com/manga/manga-base/",
+    )
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE": str(tmp_path / "oni-only.sqlite"),
+            "MANGA_DOWNLOAD_ROOT": str(tmp_path / "downloads"),
+            "ANILIST_CLIENT": FakeAniListClient(),
+            "COMICK_ENABLED": False,
+            "MANGADEX_ENABLED": False,
+            "MANGA_ONI_CLIENT": FakeMangaOniClient(oni_chapters),
+        }
+    )
+    manga = normalize_anilist_manga(ANILIST_MANGA)
+    with app.app_context():
+        store.upsert_manga(manga)
+
+    html = app.test_client().get(f"/mangas/{manga['id']}").get_data(as_text=True)
+
+    assert "Capitulos" in html
+    assert "Cap. 12" in html
+    assert "Solo en Manga Oni" in html
 
 
 def test_search_requires_tmdb_configuration(tmp_path):

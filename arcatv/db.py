@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS read_mangas (
     FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS manga_chapter_read_overrides (
+    manga_id INTEGER NOT NULL,
+    chapter_key TEXT NOT NULL,
+    is_read INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(manga_id, chapter_key),
+    FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS manga_chapter_downloads (
     manga_id INTEGER NOT NULL,
     chapter_key TEXT NOT NULL,
@@ -346,6 +355,7 @@ def manga_has_user_state(manga_id):
     db = get_db()
     checks = (
         "SELECT 1 FROM read_mangas WHERE manga_id = ? LIMIT 1",
+        "SELECT 1 FROM manga_chapter_read_overrides WHERE manga_id = ? LIMIT 1",
         "SELECT 1 FROM manga_reader_progress WHERE manga_id = ? LIMIT 1",
         "SELECT 1 FROM manga_chapter_downloads WHERE manga_id = ? LIMIT 1",
         "SELECT 1 FROM manga_download_preferences WHERE manga_id = ? LIMIT 1",
@@ -509,6 +519,7 @@ def remove_movie(movie_id):
 def remove_manga(manga_id):
     db = get_db()
     db.execute("DELETE FROM read_mangas WHERE manga_id = ?", (manga_id,))
+    db.execute("DELETE FROM manga_chapter_read_overrides WHERE manga_id = ?", (manga_id,))
     db.execute("DELETE FROM manga_reader_progress WHERE manga_id = ?", (manga_id,))
     db.execute("DELETE FROM manga_chapter_downloads WHERE manga_id = ?", (manga_id,))
     db.execute("DELETE FROM manga_download_preferences WHERE manga_id = ?", (manga_id,))
@@ -782,6 +793,58 @@ def mark_manga_chapter_read(manga_id, chapter_read):
     get_db().commit()
 
 
+def get_manga_chapter_read_override(manga_id, chapter_key):
+    row = get_db().execute(
+        """
+        SELECT is_read FROM manga_chapter_read_overrides
+        WHERE manga_id = ? AND chapter_key = ?
+        """,
+        (manga_id, str(chapter_key)),
+    ).fetchone()
+    return bool(row["is_read"]) if row else None
+
+
+def list_manga_chapter_read_overrides(manga_id):
+    rows = get_db().execute(
+        """
+        SELECT chapter_key, is_read FROM manga_chapter_read_overrides
+        WHERE manga_id = ?
+        """,
+        (manga_id,),
+    ).fetchall()
+    return {row["chapter_key"]: bool(row["is_read"]) for row in rows}
+
+
+def set_manga_chapter_read_override(manga_id, chapter_key, is_read):
+    get_db().execute(
+        """
+        INSERT INTO manga_chapter_read_overrides (manga_id, chapter_key, is_read, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(manga_id, chapter_key) DO UPDATE SET
+            is_read = excluded.is_read,
+            updated_at = excluded.updated_at
+        """,
+        (manga_id, str(chapter_key), 1 if is_read else 0, now_iso()),
+    )
+    get_db().commit()
+
+
+def delete_manga_chapter_read_override(manga_id, chapter_key):
+    get_db().execute(
+        "DELETE FROM manga_chapter_read_overrides WHERE manga_id = ? AND chapter_key = ?",
+        (manga_id, str(chapter_key)),
+    )
+    get_db().commit()
+
+
+def clear_manga_chapter_read_overrides(manga_id):
+    get_db().execute(
+        "DELETE FROM manga_chapter_read_overrides WHERE manga_id = ?",
+        (manga_id,),
+    )
+    get_db().commit()
+
+
 def unmark_episode(episode_id):
     get_db().execute("DELETE FROM watched_episodes WHERE episode_id = ?", (episode_id,))
     get_db().commit()
@@ -793,8 +856,10 @@ def unmark_movie_watched(movie_id):
 
 
 def unmark_manga_read(manga_id):
-    get_db().execute("DELETE FROM read_mangas WHERE manga_id = ?", (manga_id,))
-    get_db().commit()
+    db = get_db()
+    db.execute("DELETE FROM read_mangas WHERE manga_id = ?", (manga_id,))
+    db.execute("DELETE FROM manga_chapter_read_overrides WHERE manga_id = ?", (manga_id,))
+    db.commit()
 
 
 def clear_show_progress(show_id):
