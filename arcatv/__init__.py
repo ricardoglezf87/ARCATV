@@ -677,6 +677,7 @@ def register_routes(app):
             flash(f"No se pudieron cargar los capitulos ahora: {chapter_error}", "warning")
         download_base_url = manga_download_base_url(manga)
         source_manga_oni_url = manga_oni_url(manga)
+        split_panels = store.get_manga_split_panels(manga_id)
         chapters = attach_manga_downloads_to_chapters(manga_id, chapters, download_base_url)
         state = enrich_manga_state_with_chapters(state, chapters)
         show_read_chapters = request.args.get("leidos") == "1"
@@ -696,6 +697,7 @@ def register_routes(app):
             show_read_chapters=show_read_chapters,
             download_base_url=download_base_url,
             manga_oni_url=source_manga_oni_url,
+            split_panels=split_panels,
             chapter_error=chapter_error,
         )
 
@@ -759,6 +761,20 @@ def register_routes(app):
 
         store.set_manga_oni_url(manga_id, normalized_url)
         flash(f"Fuente de Manga Oni guardada para {manga['name']}.", "success")
+        return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
+    @app.post("/mangas/<int:manga_id>/split-panels")
+    def set_manga_split_panels(manga_id):
+        manga = store.get_manga(manga_id)
+        if not manga:
+            abort(404)
+
+        split_panels = request.form.get("split_panels") == "1"
+        store.set_manga_split_panels(manga_id, split_panels)
+        if split_panels:
+            flash(f"Dividir en viñetas activado para {manga['name']}.", "success")
+        else:
+            flash(f"Dividir en viñetas desactivado para {manga['name']}.", "success")
         return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
     @app.post("/mangas/<int:manga_id>/capitulos/descargar")
@@ -2639,15 +2655,24 @@ def download_and_store_manga_chapter(manga_id, chapter, download_urls):
     chapter_key = manga_chapter_key(chapter_label)
     chapter_dir = manga_download_folder(manga_id, chapter_key)
     temp_chapter_dir = manga_download_temp_folder(manga_id, chapter_key)
+    split_panels = store.get_manga_split_panels(manga_id)
     errors = []
 
     for download_url in download_urls:
         try:
-            result = download_manga_chapter(
-                download_url,
-                temp_chapter_dir,
-                chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
-            )
+            try:
+                result = download_manga_chapter(
+                    download_url,
+                    temp_chapter_dir,
+                    chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
+                    split_panels=split_panels,
+                )
+            except TypeError:
+                result = download_manga_chapter(
+                    download_url,
+                    temp_chapter_dir,
+                    chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
+                )
         except MissingMangaDownloadDependency:
             delete_manga_download_folder(temp_chapter_dir)
             raise

@@ -1499,3 +1499,78 @@ def test_completed_shows_are_hidden_by_default(client):
 
     assert "Serie Finalizada" not in client.get("/").get_data(as_text=True)
     assert "Serie Finalizada" in client.get("/?estado=todas").get_data(as_text=True)
+
+
+def test_manga_split_panels_preference_and_route(client, app):
+    manga_id = synthetic_comick_manga_id(COMICK_MANGA_ID)
+    client.post(
+        "/mangas/add",
+        data={"source": "comick", "source_id": COMICK_MANGA_ID},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        assert store.get_manga_split_panels(manga_id) is False
+
+    response = client.post(
+        f"/mangas/{manga_id}/split-panels",
+        data={"split_panels": "1"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "Dividir en viñetas activado" in response.get_data(as_text=True)
+    with app.app_context():
+        assert store.get_manga_split_panels(manga_id) is True
+
+    response = client.post(
+        f"/mangas/{manga_id}/split-panels",
+        data={},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "Dividir en viñetas desactivado" in response.get_data(as_text=True)
+    with app.app_context():
+        assert store.get_manga_split_panels(manga_id) is False
+
+
+def test_manga_download_split_panels_behavior(tmp_path, monkeypatch):
+    from PIL import Image
+
+    def fake_get(session, url, headers=None, timeout=20):
+        class FakeResponse:
+            content = b""
+            text = '<html><body><div id="slider"><img data-src="https://manga-oni.com/img/1.jpg"></div></body></html>'
+            def raise_for_status(self):
+                pass
+        res = FakeResponse()
+        if "img/1.jpg" in url:
+            img = Image.new("RGB", (200, 400), color="red")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG")
+            res.content = buf.getvalue()
+        return res
+
+    monkeypatch.setattr(manga_downloads, "get_with_ssl_fallback", fake_get)
+
+    dir_disabled = tmp_path / "ch_disabled"
+    result_disabled = manga_downloads.download_manga_chapter(
+        "https://manga-oni.com/lector/test/1/cascada/",
+        dir_disabled,
+        split_panels=False,
+    )
+    assert result_disabled.page_count == 1
+    assert (dir_disabled / "001.jpg").exists()
+    assert not (dir_disabled / "paginas_completas").exists()
+    assert not (dir_disabled / "config.json").exists()
+
+    dir_enabled = tmp_path / "ch_enabled"
+    result_enabled = manga_downloads.download_manga_chapter(
+        "https://manga-oni.com/lector/test/1/cascada/",
+        dir_enabled,
+        split_panels=True,
+    )
+    assert result_enabled.page_count == 1
+    assert (dir_enabled / "001.jpg").exists()
+    assert (dir_enabled / "paginas_completas" / "page_01.jpg").exists()
+    assert (dir_enabled / "config.json").exists()
+

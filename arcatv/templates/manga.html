@@ -56,6 +56,16 @@
             <input id="download-base-url" name="base_url" type="url" value="{{ download_base_url }}" placeholder="https://mangasnosekai.com/manga/una-pieza">
             <button class="button button-secondary" type="submit">Guardar URL</button>
         </form>
+        <form class="progress-form download-base-form" action="{{ url_for('set_manga_split_panels', manga_id=manga.id) }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <label class="checkbox-label" for="split-panels-check" style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink); font-size: 0.95rem;">
+                <input id="split-panels-check" name="split_panels" type="checkbox" value="1" {% if split_panels %}checked{% endif %} onchange="this.form.submit()">
+                Dividir por viñetas al descargar
+            </label>
+            <noscript>
+                <button class="button button-secondary" type="submit">Guardar</button>
+            </noscript>
+        </form>
         {% if not manga.comick_id and not manga.mangadex_id %}
             <form class="progress-form" action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
                 <input type="hidden" name="next" value="{{ request.full_path }}">

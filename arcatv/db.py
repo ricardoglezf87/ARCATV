@@ -139,10 +139,10 @@ CREATE TABLE IF NOT EXISTS manga_download_preferences (
     manga_id INTEGER PRIMARY KEY,
     base_url TEXT,
     manga_oni_url TEXT,
+    split_panels INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS rejected_manga_recommendations (
     manga_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -200,6 +200,8 @@ def ensure_columns(db):
     }
     if download_preference_columns and "manga_oni_url" not in download_preference_columns:
         db.execute("ALTER TABLE manga_download_preferences ADD COLUMN manga_oni_url TEXT")
+    if download_preference_columns and "split_panels" not in download_preference_columns:
+        db.execute("ALTER TABLE manga_download_preferences ADD COLUMN split_panels INTEGER NOT NULL DEFAULT 0")
 
 
 def init_app(app):
@@ -626,6 +628,30 @@ def set_manga_oni_url(manga_id, manga_oni_url):
             """,
             (manga_id, manga_oni_url, now_iso()),
         )
+    db.commit()
+
+
+def get_manga_split_panels(manga_id):
+    row = get_db().execute(
+        "SELECT split_panels FROM manga_download_preferences WHERE manga_id = ?",
+        (manga_id,),
+    ).fetchone()
+    return bool(row["split_panels"]) if row and row["split_panels"] is not None else False
+
+
+def set_manga_split_panels(manga_id, split_panels):
+    val = 1 if split_panels else 0
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO manga_download_preferences (manga_id, split_panels, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(manga_id) DO UPDATE SET
+            split_panels = excluded.split_panels,
+            updated_at = excluded.updated_at
+        """,
+        (manga_id, val, now_iso()),
+    )
     db.commit()
 
 
