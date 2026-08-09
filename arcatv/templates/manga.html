@@ -56,6 +56,16 @@
             <input id="download-base-url" name="base_url" type="url" value="{{ download_base_url }}" placeholder="https://mangasnosekai.com/manga/una-pieza">
             <button class="button button-secondary" type="submit">Guardar URL</button>
         </form>
+        <form class="progress-form download-base-form" action="{{ url_for('set_manga_split_panels', manga_id=manga.id) }}" method="post">
+            <input type="hidden" name="next" value="{{ request.full_path }}">
+            <label class="checkbox-label" for="split-panels-check" style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ink); font-size: 0.95rem;">
+                <input id="split-panels-check" name="split_panels" type="checkbox" value="1" {% if split_panels %}checked{% endif %} onchange="this.form.submit()">
+                Dividir por viñetas al descargar
+            </label>
+            <noscript>
+                <button class="button button-secondary" type="submit">Guardar</button>
+            </noscript>
+        </form>
         {% if not manga.comick_id and not manga.mangadex_id %}
             <form class="progress-form" action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
                 <input type="hidden" name="next" value="{{ request.full_path }}">
@@ -120,7 +130,7 @@
     </div>
 </section>
 
-{% if manga.comick_id or manga.mangadex_id %}
+{% if total_chapters or chapter_error %}
     <section class="section-heading">
         <div>
             <h2>Capitulos</h2>
@@ -160,6 +170,10 @@
                             <a class="button button-primary" href="{{ chapter.download.reader_url }}">
                                 Leer{% if chapter.download.resume_panel and chapter.download.resume_panel > 1 %} desde {{ chapter.download.resume_panel }}{% endif %}
                             </a>
+                            <form action="{{ url_for('delete_manga_chapter_images', manga_id=manga.id, chapter=chapter.chapter_key) }}" method="post" data-confirm="Se borraran solo las imagenes descargadas del capitulo {{ chapter.chapter }}. Continuar?">
+                                <input type="hidden" name="next" value="{{ request.full_path }}">
+                                <button class="button button-danger" type="submit">Borrar imagenes</button>
+                            </form>
                         {% else %}
                             <form class="chapter-download-form" action="{{ url_for('download_manga_chapter_route', manga_id=manga.id) }}" method="post">
                                 <input type="hidden" name="next" value="{{ request.full_path }}">
@@ -186,16 +200,23 @@
                             <a class="button button-secondary" href="{{ chapter.official_url }}" target="_blank" rel="noreferrer">Abrir</a>
                         {% endif %}
                         {% if chapter.chapter %}
-                            <form action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
+                            <form action="{{ url_for('set_single_manga_chapter_read', manga_id=manga.id, chapter=chapter.chapter_key) }}" method="post">
                                 <input type="hidden" name="next" value="{{ request.full_path }}">
                                 {% if chapter.read %}
-                                    <input type="hidden" name="chapter_read" value="{{ chapter.previous_chapter }}">
+                                    <input type="hidden" name="read" value="0">
                                     <button class="button button-secondary" type="submit">Visto</button>
                                 {% else %}
-                                    <input type="hidden" name="chapter_read" value="{{ chapter.chapter }}">
-                                    <button class="button button-primary" type="submit">Marcar hasta aqui</button>
+                                    <input type="hidden" name="read" value="1">
+                                    <button class="button button-secondary" type="submit">Marcar visto</button>
                                 {% endif %}
                             </form>
+                            {% if not chapter.read %}
+                                <form action="{{ url_for('set_manga_read', manga_id=manga.id) }}" method="post">
+                                    <input type="hidden" name="next" value="{{ request.full_path }}">
+                                    <input type="hidden" name="chapter_read" value="{{ chapter.chapter }}">
+                                    <button class="button button-primary" type="submit">Marcar hasta aqui</button>
+                                </form>
+                            {% endif %}
                         {% endif %}
                     </div>
                 </article>

@@ -452,7 +452,11 @@ def register_routes(app):
             status_filter = "pendientes"
 
         all_mangas = [
-            build_manga_state(manga, store.get_manga_progress(manga["id"]))
+            build_manga_state(
+                manga,
+                store.get_manga_progress(manga["id"]),
+                store.list_manga_chapter_read_overrides(manga["id"]),
+            )
             for manga in store.list_mangas()
         ]
         totals = {
@@ -663,12 +667,17 @@ def register_routes(app):
                 store.upsert_manga(merge_manga_storage(manga, updated_manga))
                 manga = store.get_manga(manga_id) or manga
 
-        state = build_manga_state(manga, store.get_manga_progress(manga_id))
+        state = build_manga_state(
+            manga,
+            store.get_manga_progress(manga_id),
+            store.list_manga_chapter_read_overrides(manga_id),
+        )
         chapters, chapter_error = preferred_manga_chapters(manga_id, manga)
         if chapter_error:
             flash(f"No se pudieron cargar los capitulos ahora: {chapter_error}", "warning")
         download_base_url = manga_download_base_url(manga)
         source_manga_oni_url = manga_oni_url(manga)
+        split_panels = store.get_manga_split_panels(manga_id)
         chapters = attach_manga_downloads_to_chapters(manga_id, chapters, download_base_url)
         state = enrich_manga_state_with_chapters(state, chapters)
         show_read_chapters = request.args.get("leidos") == "1"
@@ -688,6 +697,7 @@ def register_routes(app):
             show_read_chapters=show_read_chapters,
             download_base_url=download_base_url,
             manga_oni_url=source_manga_oni_url,
+            split_panels=split_panels,
             chapter_error=chapter_error,
         )
 
@@ -753,6 +763,20 @@ def register_routes(app):
         flash(f"Fuente de Manga Oni guardada para {manga['name']}.", "success")
         return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
+    @app.post("/mangas/<int:manga_id>/split-panels")
+    def set_manga_split_panels(manga_id):
+        manga = store.get_manga(manga_id)
+        if not manga:
+            abort(404)
+
+        split_panels = request.form.get("split_panels") == "1"
+        store.set_manga_split_panels(manga_id, split_panels)
+        if split_panels:
+            flash(f"Dividir en viñetas activado para {manga['name']}.", "success")
+        else:
+            flash(f"Dividir en viñetas desactivado para {manga['name']}.", "success")
+        return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
     @app.post("/mangas/<int:manga_id>/capitulos/descargar")
     def download_manga_chapter_route(manga_id):
         manga = store.get_manga(manga_id)
@@ -791,6 +815,21 @@ def register_routes(app):
 
         return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
+    @app.post("/mangas/<int:manga_id>/capitulos/<chapter>/imagenes/borrar")
+    def delete_manga_chapter_images(manga_id, chapter):
+        manga = store.get_manga(manga_id)
+        if not manga:
+            abort(404)
+        chapter_key = manga_chapter_key(chapter)
+        if not store.get_manga_download(manga_id, chapter_key):
+            flash(f"El capitulo {chapter} ya no tiene imagenes descargadas.", "warning")
+            return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
+        delete_manga_download_files(manga_id, chapter_key)
+        store.delete_manga_download(manga_id, chapter_key)
+        flash(f"Imagenes descargadas del capitulo {chapter} borradas.", "success")
+        return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
+
     @app.post("/mangas/<int:manga_id>/capitulos/descargar-hasta")
     def download_manga_chapters_until(manga_id):
         manga = store.get_manga(manga_id)
@@ -806,13 +845,12 @@ def register_routes(app):
             flash(f"No se pudieron cargar los capitulos: {chapter_error}", "error")
             return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
-        read_number = parse_chapter_number(store.get_manga_progress(manga_id).get("chapter_read"))
         downloads = {item["chapter_key"] for item in store.list_manga_downloads(manga_id)}
         pending = [
             chapter for chapter in chapters
             if chapter.get("chapter_number") is not None
             and chapter["chapter_number"] <= target
-            and (read_number is None or chapter["chapter_number"] > read_number)
+            and not chapter.get("read")
             and manga_chapter_key(chapter.get("chapter")) not in downloads
         ]
         pending.sort(key=lambda chapter: chapter["chapter_number"])
@@ -897,8 +935,23 @@ def register_routes(app):
         payload = request.get_json(silent=True) or request.form
         current_panel = payload.get("panel", 1)
         store.save_manga_reader_progress(manga_id, chapter, current_panel, finished=True)
-        mark_manga_chapter_read_without_regressing(manga_id, chapter)
+        mark_single_manga_chapter_read(manga_id, chapter)
         return jsonify({"ok": True, "message": f"Capitulo {chapter} marcado como leido."})
+
+    @app.post("/mangas/<int:manga_id>/capitulos/<chapter>/leido")
+    def set_single_manga_chapter_read(manga_id, chapter):
+        manga = store.get_manga(manga_id)
+        if not manga:
+            abort(404)
+
+        is_read = request.form.get("read") == "1"
+        chapter_key = manga_chapter_key(chapter)
+        store.set_manga_chapter_read_override(manga_id, chapter_key, is_read)
+        if is_read:
+            flash(f"Capitulo {chapter} marcado como visto.", "success")
+        else:
+            flash(f"Capitulo {chapter} marcado como pendiente.", "success")
+        return redirect_to_next(url_for("manga_detail", manga_id=manga_id))
 
     @app.post("/mangas/<int:manga_id>/leido")
     def set_manga_read(manga_id):
@@ -909,6 +962,7 @@ def register_routes(app):
         if "chapter_read" in request.form:
             chapter_read = request.form.get("chapter_read", "").strip()
             if chapter_read:
+                clear_manga_chapter_overrides_through(manga_id, chapter_read)
                 store.mark_manga_chapter_read(manga_id, chapter_read)
                 flash(f"Progreso de {manga['name']} actualizado al capitulo {chapter_read}.", "success")
             else:
@@ -1446,7 +1500,11 @@ def register_routes(app):
         sync_errors = []
 
         manga_states = [
-            build_manga_state(manga, store.get_manga_progress(manga["id"]))
+            build_manga_state(
+                manga,
+                store.get_manga_progress(manga["id"]),
+                store.list_manga_chapter_read_overrides(manga["id"]),
+            )
             for manga in store.list_mangas()
         ]
         source_options = [
@@ -2224,19 +2282,52 @@ def sort_movies(movies):
     )
 
 
-def build_manga_state(manga, progress=None):
+def build_manga_state(manga, progress=None, chapter_overrides=None):
     progress = progress or {}
+    chapter_overrides = chapter_overrides or {}
     read_at = progress.get("read_at")
     chapter_read = progress.get("chapter_read")
     latest_chapter_number = parse_chapter_number(manga.get("latest_chapter") or manga.get("chapters"))
-    if chapter_read:
+    numeric_overrides = {
+        number: is_read
+        for chapter_key, is_read in chapter_overrides.items()
+        if (number := parse_chapter_number(chapter_key)) is not None
+    }
+    if chapter_read or numeric_overrides:
         chapter_read_number = parse_chapter_number(chapter_read)
+        effective_count = int(chapter_read_number or 0)
+        for number, is_read in numeric_overrides.items():
+            if is_read and (chapter_read_number is None or number > chapter_read_number):
+                effective_count += 1
+            elif not is_read and chapter_read_number is not None and number <= chapter_read_number:
+                effective_count = max(0, effective_count - 1)
+
+        pending_overrides = [number for number, is_read in numeric_overrides.items() if not is_read]
         read = (
             chapter_read_number is not None
             and latest_chapter_number is not None
             and chapter_read_number >= latest_chapter_number
+            and not any(number <= latest_chapter_number for number in pending_overrides)
         )
-        percent = manga_chapter_progress_percent(chapter_read_number, latest_chapter_number, read)
+        percent = manga_chapter_progress_percent(effective_count, latest_chapter_number, read)
+        next_chapter = next_manga_chapter_placeholder(chapter_read_number, latest_chapter_number)
+        if chapter_read_number is None and latest_chapter_number is not None and latest_chapter_number >= 1:
+            next_chapter = {
+                "chapter": "1",
+                "chapter_number": 1.0,
+            }
+        if pending_overrides:
+            pending_number = min(pending_overrides)
+            if not next_chapter or pending_number < next_chapter["chapter_number"]:
+                next_chapter = {
+                    "chapter": format_chapter_number(pending_number),
+                    "chapter_number": pending_number,
+                }
+        while next_chapter and numeric_overrides.get(next_chapter["chapter_number"]) is True:
+            next_chapter = next_manga_chapter_placeholder(
+                next_chapter["chapter_number"],
+                latest_chapter_number,
+            )
         return {
             **manga,
             "read": read,
@@ -2244,14 +2335,14 @@ def build_manga_state(manga, progress=None):
             "chapter_read": chapter_read,
             "chapter_read_number": chapter_read_number,
             "volumes_read": 0,
-            "in_progress": not read,
-            "progress_label": f"Cap. {chapter_read}",
+            "in_progress": bool(effective_count) and not read,
+            "progress_label": f"Cap. {chapter_read}" if chapter_read else f"{effective_count} capitulos vistos",
             "progress_percent": percent,
             "next_volume_count": 1,
-            "next_chapter": next_manga_chapter_placeholder(chapter_read_number, latest_chapter_number),
-            "read_chapter_count": format_chapter_number(chapter_read_number) or chapter_read,
+            "next_chapter": next_chapter,
+            "read_chapter_count": effective_count,
             "available_chapter_count": format_chapter_number(latest_chapter_number),
-            "watched_count": int(chapter_read_number or 1),
+            "watched_count": effective_count,
             "completed": read,
             "progress": percent,
         }
@@ -2351,25 +2442,28 @@ def enrich_manga_state_with_chapters(manga, chapters):
     manga["latest_chapter"] = latest.get("chapter")
     manga["available_chapter_count"] = format_chapter_number(latest["chapter_number"])
     current_number = manga.get("chapter_read_number")
-    manga["next_chapter"] = None
-    if current_number is None:
-        manga["next_chapter"] = min(numbered, key=lambda chapter: chapter["chapter_number"])
-        return manga
-
-    next_chapters = [
-        chapter for chapter in numbered
-        if chapter["chapter_number"] > current_number
-    ]
-    if next_chapters:
-        manga["next_chapter"] = min(next_chapters, key=lambda chapter: chapter["chapter_number"])
-    if latest["chapter_number"] <= current_number:
+    unread_chapters = [chapter for chapter in numbered if not chapter.get("read")]
+    manga["next_chapter"] = (
+        min(unread_chapters, key=lambda chapter: chapter["chapter_number"])
+        if unread_chapters
+        else None
+    )
+    if not unread_chapters and (
+        current_number is not None and latest["chapter_number"] <= current_number
+    ):
         manga["read"] = True
         manga["completed"] = True
         manga["in_progress"] = False
         manga["progress"] = 100
         manga["progress_percent"] = 100
     else:
-        manga["progress"] = manga_chapter_progress_percent(current_number, latest["chapter_number"])
+        manga["read"] = False
+        manga["completed"] = False
+        manga["in_progress"] = bool(manga.get("read_chapter_count"))
+        manga["progress"] = manga_chapter_progress_percent(
+            manga.get("read_chapter_count"),
+            latest["chapter_number"],
+        )
         manga["progress_percent"] = manga["progress"]
     return manga
 
@@ -2534,7 +2628,11 @@ def preferred_manga_chapters(manga_id, manga, refresh=False):
 
     chapters = numbered_manga_chapters(merge_manga_oni_chapters(chapters, oni_chapters))
     chapter_read_number = parse_chapter_number(store.get_manga_progress(manga_id).get("chapter_read"))
-    chapters = mark_manga_chapters_read(chapters, chapter_read_number)
+    chapters = mark_manga_chapters_read(
+        chapters,
+        chapter_read_number,
+        overrides=store.list_manga_chapter_read_overrides(manga_id),
+    )
     return chapters, " / ".join(dict.fromkeys(errors)) if not chapters else None
 
 
@@ -2557,15 +2655,24 @@ def download_and_store_manga_chapter(manga_id, chapter, download_urls):
     chapter_key = manga_chapter_key(chapter_label)
     chapter_dir = manga_download_folder(manga_id, chapter_key)
     temp_chapter_dir = manga_download_temp_folder(manga_id, chapter_key)
+    split_panels = store.get_manga_split_panels(manga_id)
     errors = []
 
     for download_url in download_urls:
         try:
-            result = download_manga_chapter(
-                download_url,
-                temp_chapter_dir,
-                chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
-            )
+            try:
+                result = download_manga_chapter(
+                    download_url,
+                    temp_chapter_dir,
+                    chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
+                    split_panels=split_panels,
+                )
+            except TypeError:
+                result = download_manga_chapter(
+                    download_url,
+                    temp_chapter_dir,
+                    chrome_version=current_app.config.get("MANGA_BROWSER_VERSION"),
+                )
         except MissingMangaDownloadDependency:
             delete_manga_download_folder(temp_chapter_dir)
             raise
@@ -2618,6 +2725,9 @@ def manga_reader_pages(manga_id, chapter_key):
 
 
 def is_manga_chapter_read(manga_id, chapter_key):
+    override = store.get_manga_chapter_read_override(manga_id, manga_chapter_key(chapter_key))
+    if override is not None:
+        return override
     progress = store.get_manga_progress(manga_id)
     chapter_read_number = parse_chapter_number(progress.get("chapter_read"))
     chapter_number = parse_chapter_number(chapter_key)
@@ -2630,17 +2740,23 @@ def is_manga_chapter_read(manga_id, chapter_key):
     return build_manga_state(manga, progress)["read"]
 
 
-def mark_manga_chapter_read_without_regressing(manga_id, chapter_key):
-    progress = store.get_manga_progress(manga_id)
-    current_number = parse_chapter_number(progress.get("chapter_read"))
-    target_number = parse_chapter_number(chapter_key)
-    if current_number is not None and target_number is not None and current_number >= target_number:
-        return
+def mark_single_manga_chapter_read(manga_id, chapter_key):
+    store.set_manga_chapter_read_override(
+        manga_id,
+        manga_chapter_key(chapter_key),
+        True,
+    )
 
-    if target_number is not None:
-        store.mark_manga_chapter_read(manga_id, format_chapter_number(target_number))
-    else:
-        store.mark_manga_chapter_read(manga_id, chapter_key)
+
+def clear_manga_chapter_overrides_through(manga_id, chapter_key):
+    target_number = parse_chapter_number(chapter_key)
+    if target_number is None:
+        store.delete_manga_chapter_read_override(manga_id, manga_chapter_key(chapter_key))
+        return
+    for override_key in store.list_manga_chapter_read_overrides(manga_id):
+        override_number = parse_chapter_number(override_key)
+        if override_number is not None and override_number <= target_number:
+            store.delete_manga_chapter_read_override(manga_id, override_key)
 
 
 def delete_read_manga_downloads(manga_id=None):
@@ -2660,12 +2776,7 @@ def delete_read_manga_downloads(manga_id=None):
 
 
 def is_downloaded_manga_chapter_read(manga, download):
-    progress = store.get_manga_progress(manga["id"])
-    chapter_read_number = parse_chapter_number(progress.get("chapter_read"))
-    download_number = parse_chapter_number(download["chapter_key"])
-    if chapter_read_number is not None and download_number is not None:
-        return download_number <= chapter_read_number
-    return build_manga_state(manga, progress)["read"]
+    return is_manga_chapter_read(manga["id"], download["chapter_key"])
 
 
 def delete_manga_download_files(manga_id, chapter_key):
@@ -3140,7 +3251,8 @@ def get_mangadex_manga_chapters(manga, refresh=False):
     return mark_manga_chapters_read(chapters, chapter_read_number)
 
 
-def mark_manga_chapters_read(chapters, chapter_read_number):
+def mark_manga_chapters_read(chapters, chapter_read_number, overrides=None):
+    overrides = overrides or {}
     numbered_chapters = sorted(
         [
             chapter for chapter in chapters
@@ -3155,12 +3267,14 @@ def mark_manga_chapters_read(chapters, chapter_read_number):
 
     for chapter in chapters:
         chapter_number = chapter.get("chapter_number")
+        chapter_key = manga_chapter_key(chapter.get("chapter") or chapter.get("id"))
         chapter.setdefault("previous_chapter", "")
-        chapter["read"] = (
+        default_read = (
             chapter_read_number is not None
             and chapter_number is not None
             and chapter_number <= chapter_read_number
         )
+        chapter["read"] = overrides.get(chapter_key, default_read)
     return chapters
 
 

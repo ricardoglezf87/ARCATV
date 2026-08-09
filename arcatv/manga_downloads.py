@@ -32,7 +32,7 @@ class MangaDownloadResult:
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-def download_manga_chapter(url, chapter_dir, chrome_version=None):
+def download_manga_chapter(url, chapter_dir, chrome_version=None, split_panels=False):
     chapter_dir = Path(chapter_dir)
     chapter_dir.mkdir(parents=True, exist_ok=True)
 
@@ -44,7 +44,7 @@ def download_manga_chapter(url, chapter_dir, chrome_version=None):
     for strategy in strategies:
         clear_chapter_directory(chapter_dir)
         try:
-            result = strategy(url, chapter_dir, chrome_version=chrome_version)
+            result = strategy(url, chapter_dir, chrome_version=chrome_version, split_panels=split_panels)
         except MissingMangaDownloadDependency:
             raise
         except MangaDownloadError as exc:
@@ -146,11 +146,10 @@ def _manga_oni_cascade_url(url):
     return f"{base_url}/cascada/"
 
 
-def _download_manga_oni_reader(url, chapter_dir, chrome_version=None):
+def _download_manga_oni_reader(url, chapter_dir, chrome_version=None, split_panels=False):
     del chrome_version
     BeautifulSoup, Image, cv2, np = _load_image_dependencies()
     pages_dir = Path(chapter_dir) / "paginas_completas"
-    pages_dir.mkdir(parents=True, exist_ok=True)
     cascade_url = _manga_oni_cascade_url(url)
     session = requests.Session()
 
@@ -201,6 +200,7 @@ def _download_manga_oni_reader(url, chapter_dir, chrome_version=None):
             vignette_map,
             cv2,
             np,
+            split_panels=split_panels,
         )
         page_count += 1
 
@@ -334,10 +334,9 @@ def _chrome_version_commands():
     return commands
 
 
-def _download_scroll_reader(url, chapter_dir, chrome_version=None):
+def _download_scroll_reader(url, chapter_dir, chrome_version=None, split_panels=False):
     BeautifulSoup, Image, uc, cv2, np = _load_browser_dependencies()
     pages_dir = chapter_dir / "paginas_completas"
-    pages_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         driver = _new_driver(uc, chrome_version=chrome_version, performance_logs=True)
@@ -381,6 +380,7 @@ def _download_scroll_reader(url, chapter_dir, chrome_version=None):
                 vignette_map,
                 cv2,
                 np,
+                split_panels=split_panels,
             )
             page_count += 1
 
@@ -398,10 +398,9 @@ def _download_scroll_reader(url, chapter_dir, chrome_version=None):
         driver.quit()
 
 
-def _download_page_by_page_reader(url, chapter_dir, chrome_version=None):
+def _download_page_by_page_reader(url, chapter_dir, chrome_version=None, split_panels=False):
     BeautifulSoup, Image, uc, cv2, np = _load_browser_dependencies()
     pages_dir = chapter_dir / "paginas_completas"
-    pages_dir.mkdir(parents=True, exist_ok=True)
 
     base_url = re.sub(r"/p\d+/?$", "", url.rstrip("/"))
     first_page_url = f"{base_url}/p1"
@@ -443,6 +442,7 @@ def _download_page_by_page_reader(url, chapter_dir, chrome_version=None):
                 vignette_map,
                 cv2,
                 np,
+                split_panels=split_panels,
             )
             page_count += 1
 
@@ -578,15 +578,31 @@ def _reader_current_image_bytes(driver, referer):
     return _image_bytes_from_cache_or_url({}, src, referer, requests.Session())
 
 
-def _save_page_and_panels(full_page, page_index, chapter_dir, pages_dir, vignette_counter, vignette_map, cv2, np):
-    page_filename = f"page_{page_index:02d}.jpg"
-    full_page.save(pages_dir / page_filename, "JPEG", quality=85)
+def _save_page_and_panels(
+    full_page,
+    page_index,
+    chapter_dir,
+    pages_dir,
+    vignette_counter,
+    vignette_map,
+    cv2,
+    np,
+    split_panels=False,
+):
+    if split_panels:
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        page_filename = f"page_{page_index:02d}.jpg"
+        full_page.save(pages_dir / page_filename, "JPEG", quality=85)
 
-    panels = _crop_manga_panels(full_page, cv2, np)
-    for panel in panels:
+        panels = _crop_manga_panels(full_page, cv2, np)
+        for panel in panels:
+            vignette_filename = f"{vignette_counter:03d}.jpg"
+            panel.save(chapter_dir / vignette_filename, "JPEG", quality=90)
+            vignette_map[str(vignette_counter)] = page_filename
+            vignette_counter += 1
+    else:
         vignette_filename = f"{vignette_counter:03d}.jpg"
-        panel.save(chapter_dir / vignette_filename, "JPEG", quality=90)
-        vignette_map[str(vignette_counter)] = page_filename
+        full_page.save(chapter_dir / vignette_filename, "JPEG", quality=90)
         vignette_counter += 1
     return vignette_counter
 
@@ -647,6 +663,8 @@ def _image_from_array(array):
 
 
 def _write_config(chapter_dir, vignette_map):
+    if not vignette_map:
+        return
     (chapter_dir / "config.json").write_text(
         json.dumps(vignette_map, indent=2),
         encoding="utf-8",
